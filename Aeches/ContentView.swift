@@ -46,8 +46,6 @@ struct ContentView: View {
 
 struct RecordTab: View {
     @State private var activeSession: Session? = nil
-    @State private var heroSeat: Int? = nil
-    @State private var tableSize: Int = 9
 
     var body: some View {
         NavigationStack {
@@ -59,36 +57,11 @@ struct RecordTab: View {
                         onSessionCreated: { session in activeSession = session },
                         onBack: nil
                     )
-                } else if heroSeat == nil {
-                    SeatSelectionView(
-                        session: activeSession!,
-                        onSeatSelected: { seat, size in
-                            heroSeat = seat
-                            tableSize = size
-                        },
-                        onBack: {
-                            activeSession = nil
-                        }
-                    )
                 } else {
-                    // Hand entry (TableScreen) comes next
-                    ZStack {
-                        Color.appBackground.ignoresSafeArea()
-                        Text("Seat \((heroSeat ?? 0) + 1) locked — hand entry coming next")
-                            .foregroundStyle(Color.textMuted)
-                        VStack {
-                            HStack {
-                                Button(action: { heroSeat = nil }) {
-                                    Image(systemName: "chevron.left")
-                                        .font(.system(size: 18, weight: .semibold))
-                                        .foregroundStyle(Color.gold)
-                                        .padding(16)
-                                }
-                                Spacer()
-                            }
-                            Spacer()
-                        }
-                    }
+                    HandEntryView(
+                        session: activeSession!,
+                        onBack: { activeSession = nil }
+                    )
                 }
             }
             .navigationBarHidden(true)
