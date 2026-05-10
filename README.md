@@ -66,36 +66,47 @@ Pro-specific screens live inside the Profile tab — standard users and pros sha
 
 ## Core Feature: Hand Entry UI
 
-### Table View
-- A clean geometric oval representing a 9-handed poker table
-- Numbered seat indicators as subtle gold circles on dark background
-- No felt texture, no realistic casino elements — abstract and minimal
-- User selects their seat once per session — it stays locked
-- At start of each hand, user taps one seat to set the dealer button
-- Preflop action flows clockwise automatically from there
+### Screen Architecture
+The hand entry screen is a single persistent view split into two independently operating halves. The screen never navigates away during a hand — everything happens in place.
 
-### Gesture Language
-- **Tap** = Check or Call (context-dependent)
-- **Swipe right** = Bet or Raise (pushing chips forward)
-- **Swipe left** = Fold (pushing cards away)
-- **Hold + slide** = Sizing selector (common presets: 2x, 2.5x, 3x, Pot, Custom)
-- Users can navigate back to a previous street to correct a mistake — flow is not forward-only
+**Top half — Table**
+A geometric oval poker table with gold leather rail, felt surface, and numbered seat buttons. Used to record all table action: dealer button placement, seat actions (fold/call/raise), and villain interaction. The table stays visible at all times.
 
-### Hole Card Entry
-- A single row of all 13 ranks: A K Q J T 9 8 7 6 5 4 3 2
-- After tapping rank, suit options appear adjacent to the tap point (minimizing thumb travel)
-- Shortcut options: `s` (suited) and `o` (offsuit) as one-tap alternatives to selecting exact suits
-- Accepted formats: `AK`, `AKo`, `AKs`, `AKhh`, `AhKx`
+**Bottom half — Cards**
+A persistent strip showing all 7 card slots at once:
+- Hero hole cards: 2 slots
+- Flop: 3 slots
+- Turn: 1 slot
+- River: 1 slot
 
-### Hand Flow (street by street)
-1. Hole cards
-2. Preflop action (per seat, clockwise from UTG)
-3. Flop (3 community cards + action)
-4. Turn (1 card + action)
-5. River (1 card + action)
-6. Showdown / outcome (optional)
+Both halves operate independently. The user can fill in cards before recording action, record action without entering cards, or interleave them freely. There is no prescribed order.
 
-A standard hand: under 20 seconds. A contested multi-street hand with showdown: under 45 seconds.
+### Screen Flow (within Record tab)
+1. **Session creation** — select Cash Game or Tournament, fill in details
+2. **Hand entry screen** loads — table visible, card strip visible
+3. **Phase 1: Select seat** — tap any seat to lock in as hero (YOU). Seat stays locked for the entire session.
+4. **Phase 2: Place dealer button** — tap any seat to place the D button for this hand
+5. **Phase 3: Recording** — both halves active. Record in any order:
+   - Tap seats to record action (cycles: call → raise → fold → clear)
+   - Tap card slots to enter hole cards, flop, turn, river
+6. **Save Hand** — hand saved, table resets for Hand #2. Hero seat remains locked.
+
+### Table Design
+- Gold leather rail with a clean gap at 12 o'clock for the house dealer station
+- DEALER label sits centered in the gap
+- Green felt surface with radial gradient and stitching ring
+- HH monogram watermark on felt
+- Supports 6, 8, 9, and 10-seat configurations — set at session start, displayed with a size picker
+- Seat buttons show action state visually: gold for aggressor, green for call, red for fold
+
+### Card Entry
+- Tap any card slot → rank grid appears in-line (A K Q J T 9 8 7 6 5 4 3 2)
+- Tap a rank → suit options appear (♠ ♥ ♦ ♣ + unknown)
+- Suit is always optional — tap "?" to record rank only
+- For hole cards, `s` (suited) and `o` (offsuit) shortcuts available after first rank
+- Accepted notation formats: `AK`, `AKo`, `AKs`, `AhKs`, `AxKs`
+- After entering a card, picker auto-advances to the next empty slot
+- Tap "Clear" to remove a card, "Done" to dismiss picker
 
 ### Villain Profiles
 - Quick tags: OMC, LAG, TAG, Fish, Reg, Unknown
@@ -103,6 +114,7 @@ A standard hand: under 20 seconds. A contested multi-street hand with showdown: 
 - Running notes field — add reads throughout the session
 - Villain profiles persist across all hands within a session
 - Swipe left on a seat to bust/clear a player — hands already recorded retain original descriptor
+- Villain hole cards entered via their seat (showdown only)
 - Villain notes are session-only — do not persist to future sessions
 
 ### Supported Game Formats (v1.0)
@@ -154,11 +166,12 @@ A standard hand: under 20 seconds. A contested multi-street hand with showdown: 
 
 ## Onboarding & Auth
 
-- **No splash screen, no walkthrough, no marketing interstitial**
-- First launch goes directly to account creation
+- **No walkthrough, no marketing interstitial**
+- iOS launch screen shows the HH logo briefly while the app loads (system-level, unavoidable)
+- First screen in-app is the **Login screen** — logo, tagline, and three auth buttons
 - Sign in with Apple (required), Sign in with Google, Email + Password
 - All accounts require email verification and phone number
-- After account creation → lands on Record tab with single gold CTA: "Start a Session"
+- After authentication → lands on Record tab → New Session screen
 
 ---
 
@@ -183,17 +196,20 @@ A standard hand: under 20 seconds. A contested multi-street hand with showdown: 
 ## MVP v1.0 Scope
 
 ### In Scope
-- Gesture-based hand entry (NLHE cash + tournament)
-- 9-seat geometric table view, session-locked hero seat
-- Hold + slide sizing selector with presets
-- Back-navigation within a hand
-- Flexible hole card notation
+- Unified hand entry screen — table top half, card strip bottom half, both independent
+- Geometric table oval with gold rail, felt, gap at dealer station, 6/8/9/10-seat support
+- Session-locked hero seat, per-hand dealer button placement
+- Tap-to-cycle seat actions (call / raise / fold)
+- Inline card picker — rank then suit, suit optional, auto-advances to next empty slot
+- Suited/offsuit shortcuts for hole cards
+- Flexible hole card notation: AK, AKo, AKs, AhKs, AxKs
 - Villain profiles with session persistence and swipe-to-bust
+- Villain hole cards entered via seat tap (showdown only)
 - Manual session creation (Cash + Tournament)
 - Optional stack size per hand
 - Single commentary field per hand
 - Personal hand history (local + cloud sync, offline-first)
-- Sign in with Apple, Google, Email + Password
+- Login screen with Sign in with Apple, Google, Email + Password
 - Pro profiles with Live and Past sections
 - Open self-serve Pro marketplace
 - Twitter/X verification + verified badge
