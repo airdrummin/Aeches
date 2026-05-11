@@ -252,7 +252,7 @@ struct HandEntryView: View {
                 activeSeatIndices: activeSeatSequence
             )
             highlightedSeat = positions.first(where: { $0.value == "UTG" })?.key
-                ?? positions.first(where: { $0.value == "SB" })?.key
+                ?? positions.first(where: { $0.value == "BB" })?.key
             phase = .recordingHand
 
         case .recordingHand:
@@ -274,6 +274,11 @@ struct HandEntryView: View {
                 case .check: nextActionType = .open
                 default:     nextActionType = nil
                 }
+            }
+
+            if seat != highlightedSeat, activeSeatSequence.contains(seat) {
+                let between = seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
+                autoFoldSeats(between)
             }
 
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -437,17 +442,64 @@ struct HandEntryView: View {
         seatActions = [:]
         if let next = currentStreet.next() {
             currentStreet = next
+            let ordered = clockwiseOrder(from: buttonSeat ?? 0, seats: activeSeatSequence)
+            highlightedSeat = ordered.dropFirst().first
         }
     }
 
-    // MARK: - Phase Advance Stubs
+    // MARK: - Clockwise Ordering & Auto-Fold
+
+    private func clockwiseOrder(from startSeat: Int, seats: [Int]) -> [Int] {
+        let sorted = seats.sorted()
+        guard let offset = sorted.firstIndex(of: startSeat) else { return sorted }
+        return Array(sorted[offset...]) + Array(sorted[..<offset])
+    }
+
+    private func seatsStrictlyBetween(from: Int, to: Int, in seats: [Int]) -> [Int] {
+        let ordered = clockwiseOrder(from: from, seats: seats)
+        guard let toIdx = ordered.firstIndex(of: to) else { return [] }
+        return Array(ordered[1..<toIdx])
+    }
+
+    private func autoFoldSeats(_ seats: [Int]) {
+        for seat in seats where !foldedSeats.contains(seat) {
+            actionsThisStreet.append(Action(
+                seatIndex: seat,
+                position: positionFor(seat: seat),
+                actionType: .fold,
+                sizing: nil
+            ))
+            foldedSeats.insert(seat)
+            activeSeatSequence.removeAll { $0 == seat }
+        }
+        syncSeatActions()
+        betLevelThisStreet = actionsThisStreet.filter { $0.actionType == .open || $0.actionType == .raise }.count
+    }
 
     private func advanceHighlight() {
-        // Phase 03: auto-highlight next seat in sequence
+        guard let current = highlightedSeat else {
+            highlightedSeat = activeSeatSequence.first
+            return
+        }
+        guard activeSeatSequence.contains(current) else {
+            // Seat was just folded; find the next active seat clockwise from it
+            let allFromCurrent = clockwiseOrder(from: current, seats: Array(0..<tableSize))
+            highlightedSeat = allFromCurrent.dropFirst().first { activeSeatSequence.contains($0) }
+            return
+        }
+        let ordered = clockwiseOrder(from: current, seats: activeSeatSequence)
+        highlightedSeat = ordered.count > 1 ? ordered[1] : nil
     }
 
     private func advanceToNextSeat() {
-        // Phase 03: advance highlight clockwise, auto-folding skipped seats
+        guard let current = highlightedSeat else { return }
+        let allActive = clockwiseOrder(from: current, seats: activeSeatSequence)
+        guard allActive.count > 1 else { return }
+        let next = allActive[1]
+        let between = seatsStrictlyBetween(from: current, to: next, in: activeSeatSequence)
+        autoFoldSeats(between)
+        highlightedSeat = next
+        checkStreetClose()
     }
 
     // MARK: - Phase 01 Helpers
@@ -829,9 +881,12 @@ struct HandEntryView: View {
     }
 
     private func startNewHand() {
+        let prevButton = buttonSeat ?? 0
         handNumber += 1
         resetHand()
-        // Phase 03 will refine dealer button suggestion (advance one clockwise)
+        let allSeats = (0..<tableSize).map { $0 }
+        let ordered = clockwiseOrder(from: prevButton, seats: allSeats)
+        highlightedSeat = ordered.count > 1 ? ordered[1] : ordered[0]
     }
 }
 

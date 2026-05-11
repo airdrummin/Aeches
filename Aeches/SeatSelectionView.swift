@@ -294,6 +294,7 @@ struct SeatButtonView: View {
     let isActive: Bool
 
     private let size: CGFloat = 50
+    @State private var pulseScale: CGFloat = 1.0
 
     private var bg: LinearGradient {
         switch state?.action {
@@ -390,6 +391,22 @@ struct SeatButtonView: View {
             }
         }
         .frame(width: size, height: size)
+        .scaleEffect(isActive ? pulseScale : 1.0)
+        .onAppear {
+            guard isActive else { return }
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                pulseScale = 1.08
+            }
+        }
+        .onChange(of: isActive) { _, active in
+            if active {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    pulseScale = 1.08
+                }
+            } else {
+                pulseScale = 1.0
+            }
+        }
     }
 }
 
