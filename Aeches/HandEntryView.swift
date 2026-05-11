@@ -277,8 +277,12 @@ struct HandEntryView: View {
             }
 
             if seat != highlightedSeat, activeSeatSequence.contains(seat) {
-                let between = seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
-                autoFoldSeats(between)
+                var toFold: [Int] = []
+                if let hs = highlightedSeat, activeSeatSequence.contains(hs) {
+                    toFold.append(hs)
+                }
+                toFold += seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
+                autoFoldSeats(toFold)
             }
 
             withAnimation(.easeInOut(duration: 0.15)) {
