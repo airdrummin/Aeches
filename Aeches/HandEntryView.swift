@@ -74,8 +74,7 @@ struct HandEntryView: View {
         return result
     }
 
-    // True when all active seats have acted and the bet/check sequence is closed.
-    // Wired to UI triggers in Phase 02/03 — computed here as the data contract.
+    // Phase 01 data contract — kept as source of truth; actively used by checkStreetClose in Phase 02.
     private var streetIsClosed: Bool {
         guard !actionsThisStreet.isEmpty else { return false }
         let aggressors = actionsThisStreet.filter { $0.actionType == .open || $0.actionType == .raise }
@@ -113,7 +112,6 @@ struct HandEntryView: View {
                         .fontWeight(.bold)
                         .foregroundStyle(Color.textBody)
                     Spacer()
-                    // Balance
                     Image(systemName: "chevron.left").foregroundStyle(.clear)
                 }
                 .padding(.horizontal, 24)
@@ -166,17 +164,28 @@ struct HandEntryView: View {
                     .padding(.top, 10)
 
                 // ── Bottom half — Card strip ───────────────────────────
-                if phase == .recordingHand || phase == .showdown {
+                if phase == .recordingHand || phase == .showdown || phase == .handClosed {
                     cardStrip
                         .padding(.top, 10)
                 }
 
                 Spacer()
-
-                // ── Save hand button ───────────────────────────────────
-                if phase == .recordingHand || phase == .showdown {
-                    saveBar
-                }
+            }
+        }
+        // ── Action Controller Bar ──────────────────────────────────────
+        .safeAreaInset(edge: .bottom) {
+            if phase == .recordingHand || phase == .showdown || phase == .handClosed {
+                ActionControllerBar(
+                    currentStreet: currentStreet,
+                    openBetExists: openBetExists,
+                    highlightedSeat: highlightedSeat,
+                    canUndo: !actionsThisStreet.isEmpty,
+                    showNewHandCTA: phase == .showdown || phase == .handClosed,
+                    onAction: { applyAction($0) },
+                    onForward: advanceToNextSeat,
+                    onBack: undoLastAction,
+                    onNewHand: startNewHand
+                )
             }
         }
         // ── Card picker overlay ────────────────────────────────────────
@@ -207,7 +216,7 @@ struct HandEntryView: View {
 
     private var statusDotColor: Color {
         switch phase {
-        case .selectSeat:   return Color.textMuted
+        case .selectSeat:    return Color.textMuted
         case .placingButton: return Color.gold
         case .recordingHand: return Color.winGreen
         case .showdown:      return Color.gold
@@ -242,88 +251,180 @@ struct HandEntryView: View {
                 buttonSeatIndex: seat,
                 activeSeatIndices: activeSeatSequence
             )
-            // Highlight UTG (first to act preflop); fall back to SB on short-handed tables
             highlightedSeat = positions.first(where: { $0.value == "UTG" })?.key
                 ?? positions.first(where: { $0.value == "SB" })?.key
             phase = .recordingHand
 
         case .recordingHand:
-            recordAction(for: seat)
+            let currentAction = seatActionsFromStreet[seat]?.action
+            let isBetContext = currentStreet == .preflop || openBetExists
+
+            let nextActionType: ActionType?
+            if isBetContext {
+                switch currentAction {
+                case nil:           nextActionType = .call
+                case .call:         nextActionType = .raise
+                case .raise, .open: nextActionType = .fold
+                case .fold:         nextActionType = nil   // 4th tap = clear
+                case .check:        nextActionType = .call // was checked, now faces a bet
+                }
+            } else {
+                switch currentAction {
+                case nil:    nextActionType = .check
+                case .check: nextActionType = .open
+                default:     nextActionType = nil
+                }
+            }
+
+            withAnimation(.easeInOut(duration: 0.15)) {
+                highlightedSeat = seat
+                if let actionType = nextActionType {
+                    actionsThisStreet.removeAll { $0.seatIndex == seat }
+                    applyAction(actionType)
+                } else {
+                    // Clear: remove action, restore seat if it was folded
+                    let wasFolded = foldedSeats.contains(seat)
+                    actionsThisStreet.removeAll { $0.seatIndex == seat }
+                    if wasFolded {
+                        foldedSeats.remove(seat)
+                        if !activeSeatSequence.contains(seat) {
+                            activeSeatSequence.append(seat)
+                            activeSeatSequence.sort()
+                        }
+                    }
+                    betLevelThisStreet = actionsThisStreet.filter {
+                        $0.actionType == .open || $0.actionType == .raise
+                    }.count
+                    syncSeatActions()
+                }
+            }
 
         case .showdown, .handClosed:
             break
         }
     }
 
-    // MARK: - Action Recording
+    // MARK: - Action Application
 
-    private func recordAction(for seat: Int) {
-        let currentSeatAction = seatActionsFromStreet[seat]?.action
-        // Preflop always behaves as if a bet is open (forced BB acts as the open bet)
-        let isBetContext = currentStreet == .preflop || openBetExists
+    private func applyAction(_ type: ActionType) {
+        guard let seat = highlightedSeat else { return }
 
-        let nextActionType: ActionType?
-        if isBetContext {
-            switch currentSeatAction {
-            case nil:           nextActionType = .call
-            case .call:         nextActionType = .raise
-            case .raise, .open: nextActionType = .fold
-            case .fold:         nextActionType = nil   // 4th tap = clear
-            case .check:        nextActionType = .call // edge: checked then faced a bet
-            }
-        } else {
-            // Post-flop, no open bet
-            switch currentSeatAction {
-            case nil:    nextActionType = .check
-            case .check: nextActionType = .open
-            default:     nextActionType = nil          // clear any other state
-            }
+        actionsThisStreet.append(Action(
+            seatIndex: seat,
+            position: positionFor(seat: seat),
+            actionType: type,
+            sizing: nil
+        ))
+
+        if type == .fold {
+            foldedSeats.insert(seat)
+            activeSeatSequence.removeAll { $0 == seat }
         }
 
-        let prevAction = seatActionsFromStreet[seat]?.action
+        betLevelThisStreet = actionsThisStreet.filter {
+            $0.actionType == .open || $0.actionType == .raise
+        }.count
 
-        withAnimation(.easeInOut(duration: 0.15)) {
-            if let actionType = nextActionType {
-                // Replace any existing action for this seat with the new one
-                actionsThisStreet.removeAll { $0.seatIndex == seat }
-                actionsThisStreet.append(Action(
-                    seatIndex: seat,
-                    position: positionFor(seat: seat),
-                    actionType: actionType,
-                    sizing: nil
-                ))
+        syncSeatActions()
+        advanceHighlight()
+        checkStreetClose()
+    }
 
-                // Fold tracking
-                if actionType == .fold {
-                    foldedSeats.insert(seat)
-                    activeSeatSequence.removeAll { $0 == seat }
-                } else if prevAction == .fold {
-                    // Seat cycled off fold — restore to active sequence
-                    foldedSeats.remove(seat)
-                    if !activeSeatSequence.contains(seat) {
-                        activeSeatSequence.append(seat)
-                        activeSeatSequence.sort()
-                    }
+    private func syncSeatActions() {
+        seatActions = seatActionsFromStreet
+    }
+
+    // MARK: - Undo
+
+    private func undoLastAction() {
+        guard let last = actionsThisStreet.last else { return }
+        actionsThisStreet.removeLast()
+        highlightedSeat = last.seatIndex
+
+        betLevelThisStreet = actionsThisStreet.filter {
+            $0.actionType == .open || $0.actionType == .raise
+        }.count
+        foldedSeats = Set(actionsThisStreet.filter { $0.actionType == .fold }.map { $0.seatIndex })
+        activeSeatSequence = Array(0..<tableSize).filter { !foldedSeats.contains($0) }.sorted()
+
+        syncSeatActions()
+    }
+
+    // MARK: - Street Close Detection
+
+    private func checkStreetClose() {
+        let activePlayers = activeSeatSequence
+
+        if activePlayers.count == 1 {
+            // TODO: Phase 05 fold-out
+            return
+        }
+
+        guard !activePlayers.isEmpty else { return }
+
+        let aggressorIndices = actionsThisStreet.indices.filter {
+            actionsThisStreet[$0].actionType == .open || actionsThisStreet[$0].actionType == .raise
+        }
+
+        var closed = false
+
+        if currentStreet == .preflop {
+            if aggressorIndices.isEmpty {
+                // No raise: close when BB has acted
+                if let bb = bbSeat() {
+                    closed = actionsThisStreet.contains { $0.seatIndex == bb }
                 }
             } else {
-                // Clear: remove all actions for this seat
-                actionsThisStreet.removeAll { $0.seatIndex == seat }
-                if prevAction == .fold {
-                    foldedSeats.remove(seat)
-                    if !activeSeatSequence.contains(seat) {
-                        activeSeatSequence.append(seat)
-                        activeSeatSequence.sort()
-                    }
-                }
+                let lastIdx = aggressorIndices.last!
+                let lastAggressor = actionsThisStreet[lastIdx]
+                let respondedAfter = Set(
+                    actionsThisStreet[(lastIdx + 1)...]
+                        .filter { $0.actionType == .call || $0.actionType == .fold }
+                        .map { $0.seatIndex }
+                )
+                closed = activePlayers
+                    .filter { $0 != lastAggressor.seatIndex }
+                    .allSatisfy { respondedAfter.contains($0) }
             }
-
-            // Derive bet level from source of truth rather than incrementing
-            betLevelThisStreet = actionsThisStreet.filter {
-                $0.actionType == .open || $0.actionType == .raise
-            }.count
-
-            seatActions = seatActionsFromStreet
+        } else {
+            // Post-flop: everyone must have acted since the last open/raise
+            if aggressorIndices.isEmpty {
+                let actedSeats = Set(actionsThisStreet.map { $0.seatIndex })
+                closed = activePlayers.allSatisfy { actedSeats.contains($0) }
+            } else {
+                let lastIdx = aggressorIndices.last!
+                let lastAggressor = actionsThisStreet[lastIdx]
+                let respondedAfter = Set(
+                    actionsThisStreet[(lastIdx + 1)...]
+                        .filter { $0.actionType == .call || $0.actionType == .fold }
+                        .map { $0.seatIndex }
+                )
+                closed = activePlayers
+                    .filter { $0 != lastAggressor.seatIndex }
+                    .allSatisfy { respondedAfter.contains($0) }
+            }
         }
+
+        guard closed else { return }
+
+        if currentStreet == .river {
+            if activePlayers.count >= 2 {
+                phase = .showdown
+            }
+            // activePlayers.count == 1 handled above (TODO: Phase 05 fold-out)
+        } else {
+            closeStreet()
+        }
+    }
+
+    // Returns the BB's seat index based on the full table layout (position-stable across folds).
+    private func bbSeat() -> Int? {
+        guard let btn = buttonSeat else { return nil }
+        let positions = calculatePositions(
+            buttonSeatIndex: btn,
+            activeSeatIndices: Array(0..<tableSize)
+        )
+        return positions.first(where: { $0.value == "BB" })?.key
     }
 
     // MARK: - Street Management
@@ -337,6 +438,16 @@ struct HandEntryView: View {
         if let next = currentStreet.next() {
             currentStreet = next
         }
+    }
+
+    // MARK: - Phase Advance Stubs
+
+    private func advanceHighlight() {
+        // Phase 03: auto-highlight next seat in sequence
+    }
+
+    private func advanceToNextSeat() {
+        // Phase 03: advance highlight clockwise, auto-folding skipped seats
     }
 
     // MARK: - Phase 01 Helpers
@@ -560,7 +671,7 @@ struct HandEntryView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Save Bar
+    // MARK: - Save Bar (kept — replaced in body by ActionControllerBar)
 
     private var saveBar: some View {
         HStack(spacing: 12) {
@@ -715,6 +826,169 @@ struct HandEntryView: View {
         savedHands.append(hand)
         handNumber += 1
         resetHand()
+    }
+
+    private func startNewHand() {
+        handNumber += 1
+        resetHand()
+        // Phase 03 will refine dealer button suggestion (advance one clockwise)
+    }
+}
+
+// MARK: - Action Controller Bar
+
+private struct ActionControllerBar: View {
+    let currentStreet: StreetName
+    let openBetExists: Bool
+    let highlightedSeat: Int?
+    let canUndo: Bool
+    let showNewHandCTA: Bool
+    let onAction: (ActionType) -> Void
+    let onForward: () -> Void
+    let onBack: () -> Void
+    let onNewHand: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(Color.borderDark)
+                .frame(height: 1)
+
+            if showNewHandCTA {
+                newHandButton
+            } else {
+                actionRow
+            }
+        }
+        .background(Color.surface)
+    }
+
+    private var newHandButton: some View {
+        Button(action: onNewHand) {
+            Text("New Hand →")
+                .font(.custom("Arial", size: 16))
+                .fontWeight(.bold)
+                .foregroundStyle(Color(hex: "#0D0D0D"))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(
+                    LinearGradient(
+                        colors: [Color.gold, Color(hex: "#9A6820")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 0) {
+            // Back arrow
+            Button(action: onBack) {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(canUndo ? Color.gold : Color.textMuted.opacity(0.35))
+                    .frame(width: 48, height: 44)
+                    .background(Color.surface2)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(canUndo ? Color.gold.opacity(0.3) : Color.borderDark.opacity(0.4), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canUndo)
+
+            Spacer()
+
+            // Context-aware action buttons
+            actionButtons
+
+            Spacer()
+
+            // Forward arrow — preflop only
+            if currentStreet == .preflop {
+                Button(action: onForward) {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(Color.gold)
+                        .frame(width: 48, height: 44)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Color.clear.frame(width: 48, height: 44)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        let isBetContext = currentStreet == .preflop || openBetExists
+        if isBetContext {
+            HStack(spacing: 10) {
+                actionChip("Fold",  type: .fold,  style: .destructive)
+                actionChip("Call",  type: .call,  style: .neutral)
+                actionChip("Raise", type: .raise, style: .aggressive)
+            }
+        } else {
+            HStack(spacing: 10) {
+                actionChip("Check", type: .check, style: .neutral)
+                actionChip("Bet",   type: .open,  style: .aggressive)
+            }
+        }
+    }
+
+    private enum ChipStyle { case neutral, aggressive, destructive }
+
+    @ViewBuilder
+    private func actionChip(_ label: String, type: ActionType, style: ChipStyle) -> some View {
+        let isDisabled = highlightedSeat == nil
+        Button(action: { onAction(type) }) {
+            Text(label)
+                .font(.custom("Arial", size: 14))
+                .fontWeight(.bold)
+                .foregroundStyle(chipForeground(style))
+                .frame(width: 68, height: 44)
+                .background(chipBackground(style))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(chipBorder(style), lineWidth: 1.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .opacity(isDisabled ? 0.35 : 1.0)
+        .disabled(isDisabled)
+    }
+
+    private func chipForeground(_ style: ChipStyle) -> Color {
+        switch style {
+        case .neutral:     return Color.textBody
+        case .aggressive:  return Color.gold
+        case .destructive: return Color.foldRed
+        }
+    }
+
+    private func chipBackground(_ style: ChipStyle) -> Color {
+        switch style {
+        case .neutral:     return Color.surface2
+        case .aggressive:  return Color(hex: "#1A1508")
+        case .destructive: return Color(hex: "#1A0808")
+        }
+    }
+
+    private func chipBorder(_ style: ChipStyle) -> Color {
+        switch style {
+        case .neutral:     return Color.borderDark
+        case .aggressive:  return Color.gold.opacity(0.5)
+        case .destructive: return Color.foldRed.opacity(0.4)
+        }
     }
 }
 

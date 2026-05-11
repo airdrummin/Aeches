@@ -39,7 +39,7 @@ The goal is to produce a fully functional, spec-compliant hand recording experie
 | # | Phase Name | File | Status |
 |---|-----------|------|--------|
 | 01 | Street State Engine | `DEV-PHASE-table-flow-01.md` | Complete |
-| 02 | Action Controller Bar | `DEV-PHASE-table-flow-02.md` | Not Started |
+| 02 | Action Controller Bar | `DEV-PHASE-table-flow-02.md` | Complete |
 | 03 | Auto-Highlight & Auto-Fold | `DEV-PHASE-table-flow-03.md` | Not Started |
 | 04 | Bet Level & Raise Arrows | `DEV-PHASE-table-flow-04.md` | Not Started |
 | 05 | Hand Close — Fold-Out & Showdown | `DEV-PHASE-table-flow-05.md` | Not Started |
