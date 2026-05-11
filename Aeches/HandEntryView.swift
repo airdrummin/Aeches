@@ -278,7 +278,9 @@ struct HandEntryView: View {
 
             if seat != highlightedSeat, activeSeatSequence.contains(seat) {
                 var toFold: [Int] = []
-                if let hs = highlightedSeat, activeSeatSequence.contains(hs) {
+                if let hs = highlightedSeat,
+                   activeSeatSequence.contains(hs),
+                   !actionsThisStreet.contains(where: { $0.seatIndex == hs }) {
                     toFold.append(hs)
                 }
                 toFold += seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
@@ -289,7 +291,7 @@ struct HandEntryView: View {
                 highlightedSeat = seat
                 if let actionType = nextActionType {
                     actionsThisStreet.removeAll { $0.seatIndex == seat }
-                    applyAction(actionType)
+                    applyAction(actionType, advancing: false)
                 } else {
                     // Clear: remove action, restore seat if it was folded
                     let wasFolded = foldedSeats.contains(seat)
@@ -315,7 +317,7 @@ struct HandEntryView: View {
 
     // MARK: - Action Application
 
-    private func applyAction(_ type: ActionType) {
+    private func applyAction(_ type: ActionType, advancing: Bool = true) {
         guard let seat = highlightedSeat else { return }
 
         actionsThisStreet.append(Action(
@@ -335,7 +337,7 @@ struct HandEntryView: View {
         }.count
 
         syncSeatActions()
-        advanceHighlight()
+        if advancing { advanceHighlight() }
         checkStreetClose()
     }
 
@@ -500,8 +502,13 @@ struct HandEntryView: View {
         let allActive = clockwiseOrder(from: current, seats: activeSeatSequence)
         guard allActive.count > 1 else { return }
         let next = allActive[1]
-        let between = seatsStrictlyBetween(from: current, to: next, in: activeSeatSequence)
-        autoFoldSeats(between)
+        // Fold current seat (it was skipped) unless it already has an action recorded
+        var toFold: [Int] = []
+        if !actionsThisStreet.contains(where: { $0.seatIndex == current }) {
+            toFold.append(current)
+        }
+        toFold += seatsStrictlyBetween(from: current, to: next, in: activeSeatSequence)
+        autoFoldSeats(toFold)
         highlightedSeat = next
         checkStreetClose()
     }
