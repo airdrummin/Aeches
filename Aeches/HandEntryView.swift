@@ -1,5 +1,18 @@
 import SwiftUI
 
+// MARK: - StreetName Extension
+
+extension StreetName {
+    func next() -> StreetName? {
+        switch self {
+        case .preflop: return .flop
+        case .flop:    return .turn
+        case .turn:    return .river
+        case .river:   return nil
+        }
+    }
+}
+
 // MARK: - Main Hand Entry View
 
 struct HandEntryView: View {
@@ -15,6 +28,16 @@ struct HandEntryView: View {
     @State private var buttonSeat: Int? = nil
     @State private var seatActions: [Int: SeatState] = [:]
 
+    // Phase 01 — Street state engine
+    @State private var currentStreet: StreetName = .preflop
+    @State private var streets: [Street] = []
+    @State private var actionsThisStreet: [Action] = []
+    @State private var betLevelThisStreet: Int = 0
+    @State private var activeSeatSequence: [Int] = []
+    @State private var foldedSeats: Set<Int> = []
+    @State private var highlightedSeat: Int? = nil
+    @State private var savedHands: [Hand] = []
+
     // Card state
     @State private var heroCards: [CardSlot]  = [CardSlot(), CardSlot()]
     @State private var flopCards: [CardSlot]  = [CardSlot(), CardSlot(), CardSlot()]
@@ -28,13 +51,48 @@ struct HandEntryView: View {
     // Phase
     @State private var phase: Phase = .selectSeat
 
-    enum Phase { case selectSeat, placingButton, recordingHand }
+    enum Phase { case selectSeat, placingButton, recordingHand, showdown, handClosed }
 
     init(session: Session, onBack: @escaping () -> Void) {
         self.session = session
         self.onBack = onBack
         _tableSize = State(initialValue: session.tableSize)
     }
+
+    // MARK: - Phase 01 Computed Properties
+
+    private var openBetExists: Bool { betLevelThisStreet > 0 }
+
+    private var seatActionsFromStreet: [Int: SeatState] {
+        var result: [Int: SeatState] = [:]
+        for action in actionsThisStreet {
+            result[action.seatIndex] = SeatState(
+                action: seatStateAction(from: action.actionType),
+                sizeLabel: nil
+            )
+        }
+        return result
+    }
+
+    // True when all active seats have acted and the bet/check sequence is closed.
+    // Wired to UI triggers in Phase 02/03 — computed here as the data contract.
+    private var streetIsClosed: Bool {
+        guard !actionsThisStreet.isEmpty else { return false }
+        let aggressors = actionsThisStreet.filter { $0.actionType == .open || $0.actionType == .raise }
+        if aggressors.isEmpty {
+            let checkedSeats = Set(actionsThisStreet.filter { $0.actionType == .check }.map { $0.seatIndex })
+            return activeSeatSequence.allSatisfy { checkedSeats.contains($0) }
+        }
+        guard let lastAggressor = aggressors.last else { return false }
+        let respondedSeats = Set(
+            actionsThisStreet.filter { $0.actionType == .call || $0.actionType == .fold }.map { $0.seatIndex }
+        )
+        return activeSeatSequence
+            .filter { $0 != lastAggressor.seatIndex }
+            .allSatisfy { respondedSeats.contains($0) }
+    }
+
+    // MARK: - Body
 
     var body: some View {
         ZStack {
@@ -72,7 +130,7 @@ struct HandEntryView: View {
                     heroSeat: heroSeat,
                     buttonSeat: buttonSeat,
                     seatStates: seatActions,
-                    activeSeat: nil,
+                    activeSeat: highlightedSeat,
                     onSeatTap: handleSeatTap
                 )
                 .padding(.horizontal, 8)
@@ -108,7 +166,7 @@ struct HandEntryView: View {
                     .padding(.top, 10)
 
                 // ── Bottom half — Card strip ───────────────────────────
-                if phase == .recordingHand {
+                if phase == .recordingHand || phase == .showdown {
                     cardStrip
                         .padding(.top, 10)
                 }
@@ -116,7 +174,7 @@ struct HandEntryView: View {
                 Spacer()
 
                 // ── Save hand button ───────────────────────────────────
-                if phase == .recordingHand {
+                if phase == .recordingHand || phase == .showdown {
                     saveBar
                 }
             }
@@ -149,9 +207,11 @@ struct HandEntryView: View {
 
     private var statusDotColor: Color {
         switch phase {
-        case .selectSeat:    return Color.textMuted
+        case .selectSeat:   return Color.textMuted
         case .placingButton: return Color.gold
         case .recordingHand: return Color.winGreen
+        case .showdown:      return Color.gold
+        case .handClosed:    return Color.textMuted
         }
     }
 
@@ -162,6 +222,8 @@ struct HandEntryView: View {
         case .recordingHand:
             if let btn = buttonSeat { return "Dealer: Seat \(btn + 1)  ·  Record action or fill in cards" }
             return "Recording Hand #\(handNumber)"
+        case .showdown:      return "Showdown — select winner"
+        case .handClosed:    return "Hand complete — tap New Hand to continue"
         }
     }
 
@@ -175,22 +237,143 @@ struct HandEntryView: View {
 
         case .placingButton:
             buttonSeat = seat
+            activeSeatSequence = Array(0..<tableSize)
+            let positions = calculatePositions(
+                buttonSeatIndex: seat,
+                activeSeatIndices: activeSeatSequence
+            )
+            // Highlight UTG (first to act preflop); fall back to SB on short-handed tables
+            highlightedSeat = positions.first(where: { $0.value == "UTG" })?.key
+                ?? positions.first(where: { $0.value == "SB" })?.key
             phase = .recordingHand
 
         case .recordingHand:
-            // Toggle action sheet for that seat
-            let current = seatActions[seat]?.action
-            withAnimation(.easeInOut(duration: 0.15)) {
-                if current == nil {
-                    seatActions[seat] = SeatState(action: .call)
-                } else if current == .call {
-                    seatActions[seat] = SeatState(action: .raise)
-                } else if current == .raise {
-                    seatActions[seat] = SeatState(action: .fold)
-                } else {
-                    seatActions.removeValue(forKey: seat)
+            recordAction(for: seat)
+
+        case .showdown, .handClosed:
+            break
+        }
+    }
+
+    // MARK: - Action Recording
+
+    private func recordAction(for seat: Int) {
+        let currentSeatAction = seatActionsFromStreet[seat]?.action
+        // Preflop always behaves as if a bet is open (forced BB acts as the open bet)
+        let isBetContext = currentStreet == .preflop || openBetExists
+
+        let nextActionType: ActionType?
+        if isBetContext {
+            switch currentSeatAction {
+            case nil:           nextActionType = .call
+            case .call:         nextActionType = .raise
+            case .raise, .open: nextActionType = .fold
+            case .fold:         nextActionType = nil   // 4th tap = clear
+            case .check:        nextActionType = .call // edge: checked then faced a bet
+            }
+        } else {
+            // Post-flop, no open bet
+            switch currentSeatAction {
+            case nil:    nextActionType = .check
+            case .check: nextActionType = .open
+            default:     nextActionType = nil          // clear any other state
+            }
+        }
+
+        let prevAction = seatActionsFromStreet[seat]?.action
+
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if let actionType = nextActionType {
+                // Replace any existing action for this seat with the new one
+                actionsThisStreet.removeAll { $0.seatIndex == seat }
+                actionsThisStreet.append(Action(
+                    seatIndex: seat,
+                    position: positionFor(seat: seat),
+                    actionType: actionType,
+                    sizing: nil
+                ))
+
+                // Fold tracking
+                if actionType == .fold {
+                    foldedSeats.insert(seat)
+                    activeSeatSequence.removeAll { $0 == seat }
+                } else if prevAction == .fold {
+                    // Seat cycled off fold — restore to active sequence
+                    foldedSeats.remove(seat)
+                    if !activeSeatSequence.contains(seat) {
+                        activeSeatSequence.append(seat)
+                        activeSeatSequence.sort()
+                    }
+                }
+            } else {
+                // Clear: remove all actions for this seat
+                actionsThisStreet.removeAll { $0.seatIndex == seat }
+                if prevAction == .fold {
+                    foldedSeats.remove(seat)
+                    if !activeSeatSequence.contains(seat) {
+                        activeSeatSequence.append(seat)
+                        activeSeatSequence.sort()
+                    }
                 }
             }
+
+            // Derive bet level from source of truth rather than incrementing
+            betLevelThisStreet = actionsThisStreet.filter {
+                $0.actionType == .open || $0.actionType == .raise
+            }.count
+
+            seatActions = seatActionsFromStreet
+        }
+    }
+
+    // MARK: - Street Management
+
+    private func closeStreet() {
+        let completed = Street(name: currentStreet, boardCards: [], actions: actionsThisStreet)
+        streets.append(completed)
+        actionsThisStreet = []
+        betLevelThisStreet = 0
+        seatActions = [:]
+        if let next = currentStreet.next() {
+            currentStreet = next
+        }
+    }
+
+    // MARK: - Phase 01 Helpers
+
+    private func seatStateAction(from actionType: ActionType) -> SeatState.Action {
+        switch actionType {
+        case .fold:  return .fold
+        case .check: return .check
+        case .call:  return .call
+        case .open:  return .open
+        case .raise: return .raise
+        }
+    }
+
+    private func positionFor(seat: Int) -> String {
+        guard let btn = buttonSeat else { return "?" }
+        return calculatePositions(
+            buttonSeatIndex: btn,
+            activeSeatIndices: activeSeatSequence
+        )[seat] ?? "?"
+    }
+
+    private func suitKey(_ symbol: String) -> String {
+        switch symbol {
+        case "♠": return "s"
+        case "♥": return "h"
+        case "♦": return "d"
+        case "♣": return "c"
+        default:  return ""
+        }
+    }
+
+    private func buildHeroCards() -> [Card] {
+        heroCards.compactMap { slot in
+            guard let rankStr = slot.rank, let rank = Rank(rawValue: rankStr) else { return nil }
+            let suit = slot.suit.flatMap { Suit(rawValue: suitKey($0)) }
+            return Card(rank: rank, suit: suit)
         }
     }
 
@@ -503,10 +686,33 @@ struct HandEntryView: View {
         riverCard  = CardSlot()
         pickingRank = nil
         activeSlot  = nil
+        currentStreet = .preflop
+        streets = []
+        actionsThisStreet = []
+        betLevelThisStreet = 0
+        activeSeatSequence = []
+        foldedSeats = []
+        highlightedSeat = nil
         phase = .placingButton
     }
 
     private func saveHand() {
+        let hand = Hand(
+            sessionId: session.id,
+            handNumber: handNumber,
+            title: nil,
+            heroSeatIndex: heroSeat ?? 0,
+            buttonSeatIndex: buttonSeat ?? 0,
+            activeSeatIndices: activeSeatSequence,
+            holeCards: buildHeroCards(),
+            streets: streets,
+            outcome: nil,
+            potSize: nil,
+            potUnit: session.potUnit,
+            effectiveStack: nil,
+            commentary: nil
+        )
+        savedHands.append(hand)
         handNumber += 1
         resetHand()
     }
