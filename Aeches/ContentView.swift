@@ -45,7 +45,18 @@ struct ContentView: View {
 // MARK: - Tab Placeholders
 
 struct RecordTab: View {
+    #if DEBUG
+    @State private var activeSession: Session? = Session(
+        type: .cash,
+        name: "Dev Session",
+        date: Date(),
+        tableSize: 9,
+        heroSeatIndex: 0,
+        stakes: "2/5"
+    )
+    #else
     @State private var activeSession: Session? = nil
+    #endif
 
     var body: some View {
         NavigationStack {

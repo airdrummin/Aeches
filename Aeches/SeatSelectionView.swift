@@ -8,7 +8,12 @@ struct TableOvalView: View {
     let buttonSeat: Int?
     let seatStates: [Int: SeatState]
     let activeSeat: Int?
+    let positions: [Int: String]
     let onSeatTap: (Int) -> Void
+    var instruction: String? = nil
+    var actionText: String? = nil
+
+    @State private var instructionPulse: Bool = false
 
     // Rail gap at top — trim coordinates (0=right, 0.25=bottom, 0.5=left, 0.75=top)
     private let gapCenter: Double = 0.75
@@ -138,12 +143,46 @@ struct TableOvalView: View {
                     )
                     .frame(width: rx * 1.52, height: ry * 1.52)
 
-                // ── HH watermark ───────────────────────────────────────
-                Text("HH")
-                    .font(.custom("Georgia", size: 30))
-                    .fontWeight(.black)
-                    .tracking(-2)
-                    .foregroundStyle(Color.gold.opacity(0.07))
+                // ── HH watermark / phase instruction / action text ────
+                if let instruction {
+                    Text(instruction)
+                        .font(.custom("Georgia", size: 20))
+                        .fontWeight(.black)
+                        .tracking(3)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Color.gold.opacity(instructionPulse ? 0.82 : 0.65))
+                        .scaleEffect(instructionPulse ? 1.02 : 1.0)
+                        .shadow(color: Color.gold.opacity(instructionPulse ? 0.18 : 0.0), radius: 8)
+                        .shadow(color: Color.black.opacity(0.7), radius: 4)
+                        .transition(.opacity)
+                        .onAppear {
+                            withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
+                                instructionPulse = true
+                            }
+                        }
+                        .onChange(of: instruction) { _, _ in
+                            instructionPulse = false
+                            withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
+                                instructionPulse = true
+                            }
+                        }
+                } else if let actionText {
+                    Text(actionText)
+                        .font(.custom("Georgia", size: 13))
+                        .fontWeight(.semibold)
+                        .tracking(1.5)
+                        .foregroundStyle(Color.gold.opacity(0.38))
+                        .transition(.opacity)
+                        .onAppear { instructionPulse = false }
+                } else {
+                    Text("HH")
+                        .font(.custom("Georgia", size: 30))
+                        .fontWeight(.black)
+                        .tracking(-2)
+                        .foregroundStyle(Color.gold.opacity(0.07))
+                        .transition(.opacity)
+                        .onAppear { instructionPulse = false }
+                }
 
                 // ── Seats ──────────────────────────────────────────────
                 ForEach(0..<tableSize, id: \.self) { i in
@@ -153,7 +192,8 @@ struct TableOvalView: View {
                         isHero: heroSeat == i,
                         hasButton: buttonSeat == i,
                         state: seatStates[i],
-                        isActive: activeSeat == i
+                        isActive: activeSeat == i,
+                        position: positions[i]
                     )
                     .position(x: pos.x, y: pos.y)
                     .onTapGesture { onSeatTap(i) }
@@ -186,13 +226,14 @@ struct TableOvalView: View {
         }
         .frame(height: 300)
         .animation(.easeInOut(duration: 0.2), value: tableSize)
+        .animation(.easeInOut(duration: 0.35), value: instruction)
     }
 }
 
 // MARK: - Seat Button View
 
 struct SeatState {
-    enum Action { case fold, call, check, open, raise }
+    enum Action { case fold, call, check, open, raise, foldedOut }
     var action: Action?
     var betLevel: Int = 0
 }
@@ -203,11 +244,17 @@ struct SeatButtonView: View {
     let hasButton: Bool
     let state: SeatState?
     let isActive: Bool
+    var position: String? = nil
 
     private let size: CGFloat = 50
     @State private var pulseScale: CGFloat = 1.0
 
+    private var isFoldedOut: Bool { state?.action == .foldedOut }
+
     private var bg: LinearGradient {
+        if isFoldedOut {
+            return LinearGradient(colors: [Color(hex: "#111111"), Color(hex: "#0A0A0A")], startPoint: .top, endPoint: .bottom)
+        }
         switch state?.action {
         case .fold:
             return LinearGradient(colors: [Color.foldRedBg, Color.foldRedBg.opacity(0.7)], startPoint: .top, endPoint: .bottom)
@@ -215,7 +262,7 @@ struct SeatButtonView: View {
             return LinearGradient(colors: [Color.winGreenBg, Color.winGreenBg.opacity(0.7)], startPoint: .top, endPoint: .bottom)
         case .open, .raise:
             return LinearGradient(colors: [Color(hex: "#2A2210"), Color(hex: "#1A1508")], startPoint: .top, endPoint: .bottom)
-        case nil:
+        case nil, .foldedOut:
             if isHero {
                 return LinearGradient(colors: [Color(hex: "#1F4A35"), Color(hex: "#0F2A1D")], startPoint: .top, endPoint: .bottom)
             }
@@ -224,12 +271,24 @@ struct SeatButtonView: View {
     }
 
     private var borderColor: Color {
-        if isActive { return Color.gold }
+        if isFoldedOut { return Color(hex: "#2A2A2A") }
+        if isActive { return Color.white }
         switch state?.action {
         case .fold:          return Color.foldRed
         case .call, .check:  return Color.winGreen
         case .open, .raise:  return Color.gold
-        case nil:            return isHero ? Color.gold : Color(hex: "#444444")
+        case nil:            return isHero ? Color.goldLight : Color(hex: "#444444")
+        case .foldedOut:     return Color(hex: "#2A2A2A")
+        }
+    }
+
+    private var labelColor: Color {
+        if isFoldedOut { return Color(hex: "#444444") }
+        switch state?.action {
+        case .fold:          return Color.foldRed
+        case .call, .check:  return Color.winGreen
+        case .open, .raise:  return Color.gold
+        case nil, .foldedOut: return Color.white
         }
     }
 
@@ -246,53 +305,57 @@ struct SeatButtonView: View {
             case 3:  return "↑↑↑↑"
             default: return "↑"
             }
-        case nil:     return "\(index + 1)"
+        case .foldedOut: return position ?? "\(index + 1)"
+        case nil:        return position ?? "\(index + 1)"
         }
     }
 
     var body: some View {
         ZStack {
-            // Base shadow
-            Circle()
-                .fill(Color.black.opacity(0.6))
-                .frame(width: size, height: size)
-                .offset(y: 3)
-                .blur(radius: 4)
+            if !isFoldedOut {
+                Circle()
+                    .fill(Color.black.opacity(0.6))
+                    .frame(width: size, height: size)
+                    .offset(y: 3)
+                    .blur(radius: 4)
+            }
 
-            // Seat circle
             Circle()
                 .fill(bg)
                 .frame(width: size, height: size)
                 .overlay(
                     Circle()
-                        .stroke(borderColor, lineWidth: isActive || isHero ? 2.5 : 1.5)
+                        .stroke(borderColor, lineWidth: isFoldedOut ? 1 : (isActive || isHero ? 2.5 : 1.5))
                 )
-                // Top specular highlight
                 .overlay(
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.12), Color.clear],
-                                startPoint: .top,
-                                endPoint: .center
-                            )
-                        )
+                    Group {
+                        if !isFoldedOut {
+                            Circle()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color.white.opacity(0.12), Color.clear],
+                                        startPoint: .top,
+                                        endPoint: .center
+                                    )
+                                )
+                        }
+                    }
                 )
-                .shadow(color: isActive ? Color.gold.opacity(0.6) : isHero ? Color.gold.opacity(0.2) : .clear, radius: isActive ? 10 : 6)
+                .shadow(color: isFoldedOut ? .clear : (isActive ? Color.white.opacity(0.45) : isHero ? Color.goldLight.opacity(0.15) : .clear), radius: isActive ? 10 : 6)
+                .opacity(isFoldedOut ? 0.35 : 1.0)
 
-            // Label
             VStack(spacing: 1) {
                 Text(label)
-                    .font(.system(size: state == nil ? 15 : 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(state == nil ? Color.white : borderColor)
+                    .font(.system(size: state == nil || isFoldedOut ? 11 : 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(labelColor)
                 if isHero && state == nil {
                     Text("YOU")
                         .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(Color.gold.opacity(0.8))
+                        .foregroundStyle(Color.goldLight.opacity(0.8))
                 }
             }
+            .opacity(isFoldedOut ? 0.5 : 1.0)
 
-            // Dealer button badge
             if hasButton {
                 ZStack {
                     Circle()

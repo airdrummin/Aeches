@@ -6,6 +6,10 @@ struct AechesApp: App {
 
     var body: some Scene {
         WindowGroup {
+            #if DEBUG
+            ContentView()
+                .preferredColorScheme(.dark)
+            #else
             if isAuthenticated {
                 ContentView()
                     .preferredColorScheme(.dark)
@@ -15,6 +19,7 @@ struct AechesApp: App {
                 })
                 .preferredColorScheme(.dark)
             }
+            #endif
         }
     }
 }

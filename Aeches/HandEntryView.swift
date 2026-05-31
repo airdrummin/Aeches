@@ -70,6 +70,28 @@ struct HandEntryView: View {
 
     private var openBetExists: Bool { betLevelThisStreet > 0 }
 
+    private var feltActionText: String? {
+        guard phase == .recordingHand, let seat = highlightedSeat else { return nil }
+        let pos = seatPositions[seat] ?? "?"
+        return "Action on \(pos)"
+    }
+
+    private var tableInstruction: String? {
+        switch phase {
+        case .selectSeat:    return "TAKE\nYOUR SEAT"
+        case .placingButton: return "PLACE\nTHE BUTTON"
+        default:             return nil
+        }
+    }
+
+    private var seatPositions: [Int: String] {
+        guard let btn = buttonSeat else { return [:] }
+        return calculatePositions(
+            buttonSeatIndex: btn,
+            activeSeatIndices: Array(0..<tableSize)
+        )
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -108,7 +130,10 @@ struct HandEntryView: View {
                     buttonSeat: buttonSeat,
                     seatStates: seatActions,
                     activeSeat: highlightedSeat,
-                    onSeatTap: handleSeatTap
+                    positions: seatPositions,
+                    onSeatTap: handleSeatTap,
+                    instruction: tableInstruction,
+                    actionText: feltActionText
                 )
                 .overlay {
                     if phase == .showdown {
@@ -257,17 +282,17 @@ struct HandEntryView: View {
             let nextActionType: ActionType?
             if isBetContext {
                 switch currentAction {
-                case nil:           nextActionType = .call
-                case .call:         nextActionType = .raise
-                case .raise, .open: nextActionType = .fold
-                case .fold:         nextActionType = nil   // 4th tap = clear
-                case .check:        nextActionType = .call // was checked, now faces a bet
+                case nil, .foldedOut: nextActionType = .call
+                case .call:           nextActionType = .raise
+                case .raise, .open:   nextActionType = .fold
+                case .fold:           nextActionType = nil   // 4th tap = clear
+                case .check:          nextActionType = .call // was checked, now faces a bet
                 }
             } else {
                 switch currentAction {
-                case nil:    nextActionType = .check
-                case .check: nextActionType = .open
-                default:     nextActionType = nil
+                case nil, .foldedOut: nextActionType = .check
+                case .check:          nextActionType = .open
+                default:              nextActionType = nil
                 }
             }
 
@@ -376,6 +401,13 @@ struct HandEntryView: View {
 
     private func syncSeatActions() {
         var result: [Int: SeatState] = [:]
+
+        // Ghost seats for folds that happened on prior streets
+        let foldedThisStreet = Set(actionsThisStreet.filter { $0.actionType == .fold }.map { $0.seatIndex })
+        for seat in foldedSeats where !foldedThisStreet.contains(seat) {
+            result[seat] = SeatState(action: .foldedOut)
+        }
+
         for action in actionsThisStreet {
             let seatAction: SeatState.Action
             switch action.actionType {
@@ -495,9 +527,13 @@ struct HandEntryView: View {
         seatActions = [:]
         if let next = currentStreet.next() {
             currentStreet = next
-            let ordered = clockwiseOrder(from: buttonSeat ?? 0, seats: activeSeatSequence)
-            highlightedSeat = ordered.dropFirst().first
+            let btn = buttonSeat ?? 0
+            let all = Array(0..<tableSize)
+            let btnIdx = all.firstIndex(of: btn) ?? 0
+            let rotated = Array(all[(btnIdx + 1)...]) + Array(all[...btnIdx])
+            highlightedSeat = rotated.first { activeSeatSequence.contains($0) }
         }
+        syncSeatActions()
     }
 
     // MARK: - Clockwise Ordering & Auto-Fold
@@ -591,55 +627,64 @@ struct HandEntryView: View {
     // MARK: - Card Strip
 
     private var cardStrip: some View {
-        VStack(spacing: 12) {
-            // Labels row
-            HStack(spacing: 0) {
-                Text("HOLE")
-                    .frame(width: cardSlotWidth * 2 + 6)
-                Spacer()
-                Text("FLOP")
-                    .frame(width: cardSlotWidth * 3 + 8)
-                Spacer()
-                Text("TURN")
-                    .frame(width: cardSlotWidth)
-                Spacer()
-                Text("RIVER")
-                    .frame(width: cardSlotWidth)
+        HStack(alignment: .top, spacing: 0) {
+            streetSection(label: "HOLE", isActive: currentStreet == .preflop) {
+                HStack(spacing: 4) {
+                    ForEach(0..<2, id: \.self) { i in
+                        CardSlotView(slot: heroCards[i], isActive: activeSlot == .hero(i))
+                            .onTapGesture { openPicker(for: .hero(i)) }
+                    }
+                }
             }
-            .font(.system(size: 9, weight: .bold))
-            .tracking(1.5)
-            .foregroundStyle(Color.textMuted)
-            .padding(.horizontal, 16)
 
-            // Card slots row
-            HStack(spacing: 4) {
-                // Hero hole cards
-                ForEach(0..<2, id: \.self) { i in
-                    CardSlotView(slot: heroCards[i], isActive: activeSlot == .hero(i))
-                        .onTapGesture { openPicker(for: .hero(i)) }
+            Spacer()
+
+            streetSection(label: "FLOP", isActive: currentStreet == .flop) {
+                HStack(spacing: 4) {
+                    ForEach(0..<3, id: \.self) { i in
+                        CardSlotView(slot: flopCards[i], isActive: activeSlot == .flop(i))
+                            .onTapGesture { openPicker(for: .flop(i)) }
+                    }
                 }
+            }
 
-                Spacer().frame(width: 8)
+            Spacer()
 
-                // Flop
-                ForEach(0..<3, id: \.self) { i in
-                    CardSlotView(slot: flopCards[i], isActive: activeSlot == .flop(i))
-                        .onTapGesture { openPicker(for: .flop(i)) }
-                }
-
-                Spacer().frame(width: 8)
-
-                // Turn
+            streetSection(label: "TURN", isActive: currentStreet == .turn) {
                 CardSlotView(slot: turnCard, isActive: activeSlot == .turn)
                     .onTapGesture { openPicker(for: .turn) }
+            }
 
-                Spacer().frame(width: 8)
+            Spacer()
 
-                // River
+            streetSection(label: "RIVER", isActive: currentStreet == .river) {
                 CardSlotView(slot: riverCard, isActive: activeSlot == .river)
                     .onTapGesture { openPicker(for: .river) }
             }
-            .padding(.horizontal, 12)
+        }
+        .padding(.horizontal, 12)
+        .animation(.easeInOut(duration: 0.25), value: currentStreet)
+    }
+
+    @ViewBuilder
+    private func streetSection<Content: View>(
+        label: String,
+        isActive: Bool,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .tracking(1.5)
+                .foregroundStyle(isActive ? Color.gold : Color.textMuted)
+
+            content()
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(isActive ? Color.gold.opacity(0.45) : Color.clear, lineWidth: 1.5)
+                )
         }
     }
 
