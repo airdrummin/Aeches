@@ -28,7 +28,7 @@ struct HandEntryView: View {
     @State private var buttonSeat: Int? = nil
     @State private var seatActions: [Int: SeatState] = [:]
 
-    // Phase 01 — Street state engine
+    // Street state
     @State private var currentStreet: StreetName = .preflop
     @State private var streets: [Street] = []
     @State private var actionsThisStreet: [Action] = []
@@ -48,7 +48,14 @@ struct HandEntryView: View {
     @State private var activeSlot: SlotID? = nil
     @State private var pickingRank: String? = nil
 
-    // Phase
+    // Showdown state
+    @State private var villainCardEntryEnabled: Bool = false
+    @State private var villainShowdownCards: [Int: [CardSlot]] = [:]
+    @State private var activeVillainSeat: Int? = nil
+    @State private var activeVillainCardIndex: Int = 0
+    @State private var villainPickingRank: String? = nil
+    @State private var handCloseSummary: String = ""
+
     @State private var phase: Phase = .selectSeat
 
     enum Phase { case selectSeat, placingButton, recordingHand, showdown, handClosed }
@@ -59,34 +66,9 @@ struct HandEntryView: View {
         _tableSize = State(initialValue: session.tableSize)
     }
 
-    // MARK: - Phase 01 Computed Properties
+    // MARK: - Computed Properties
 
     private var openBetExists: Bool { betLevelThisStreet > 0 }
-
-    private var seatActionsFromStreet: [Int: SeatState] {
-        var result: [Int: SeatState] = [:]
-        for action in actionsThisStreet {
-            result[action.seatIndex] = SeatState(action: seatStateAction(from: action.actionType))
-        }
-        return result
-    }
-
-    // Phase 01 data contract — kept as source of truth; actively used by checkStreetClose in Phase 02.
-    private var streetIsClosed: Bool {
-        guard !actionsThisStreet.isEmpty else { return false }
-        let aggressors = actionsThisStreet.filter { $0.actionType == .open || $0.actionType == .raise }
-        if aggressors.isEmpty {
-            let checkedSeats = Set(actionsThisStreet.filter { $0.actionType == .check }.map { $0.seatIndex })
-            return activeSeatSequence.allSatisfy { checkedSeats.contains($0) }
-        }
-        guard let lastAggressor = aggressors.last else { return false }
-        let respondedSeats = Set(
-            actionsThisStreet.filter { $0.actionType == .call || $0.actionType == .fold }.map { $0.seatIndex }
-        )
-        return activeSeatSequence
-            .filter { $0 != lastAggressor.seatIndex }
-            .allSatisfy { respondedSeats.contains($0) }
-    }
 
     // MARK: - Body
 
@@ -128,7 +110,14 @@ struct HandEntryView: View {
                     activeSeat: highlightedSeat,
                     onSeatTap: handleSeatTap
                 )
+                .overlay {
+                    if phase == .showdown {
+                        ShowdownOverlay(onResolve: resolveShowdown)
+                            .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    }
+                }
                 .padding(.horizontal, 8)
+                .animation(.easeInOut(duration: 0.25), value: phase == .showdown)
 
                 // ── Table size picker (seat select only) ──────────────
                 if phase == .selectSeat {
@@ -217,7 +206,13 @@ struct HandEntryView: View {
         case .placingButton: return Color.gold
         case .recordingHand: return Color.winGreen
         case .showdown:      return Color.gold
-        case .handClosed:    return Color.textMuted
+        case .handClosed:
+            switch handCloseSummary {
+            case "You win":  return Color.winGreen
+            case "You lose": return Color.foldRed
+            case "Chop":     return Color.gold
+            default:         return Color.textMuted
+            }
         }
     }
 
@@ -228,8 +223,11 @@ struct HandEntryView: View {
         case .recordingHand:
             if let btn = buttonSeat { return "Dealer: Seat \(btn + 1)  ·  Record action or fill in cards" }
             return "Recording Hand #\(handNumber)"
-        case .showdown:      return "Showdown — select winner"
-        case .handClosed:    return "Hand complete — tap New Hand to continue"
+        case .showdown:      return "Showdown — select a winner"
+        case .handClosed:
+            return handCloseSummary.isEmpty
+                ? "Hand saved · Tap New Hand to continue"
+                : "\(handCloseSummary) · Tap New Hand to continue"
         }
     }
 
@@ -253,7 +251,7 @@ struct HandEntryView: View {
             phase = .recordingHand
 
         case .recordingHand:
-            let currentAction = seatActionsFromStreet[seat]?.action
+            let currentAction = seatActions[seat]?.action
             let isBetContext = currentStreet == .preflop || openBetExists
 
             let nextActionType: ActionType?
@@ -307,8 +305,20 @@ struct HandEntryView: View {
                 }
             }
 
-        case .showdown, .handClosed:
+        case .showdown:
             break
+
+        case .handClosed:
+            guard villainCardEntryEnabled else { return }
+            guard seat != heroSeat else { return }
+            let isActiveAtShowdown = activeSeatSequence.contains(seat) || foldedSeats.contains(seat)
+            guard isActiveAtShowdown else { return }
+            activeVillainSeat = seat
+            activeVillainCardIndex = 0
+            villainPickingRank = nil
+            if villainShowdownCards[seat] == nil {
+                villainShowdownCards[seat] = [CardSlot(), CardSlot()]
+            }
         }
     }
 
@@ -327,6 +337,10 @@ struct HandEntryView: View {
         if type == .fold {
             foldedSeats.insert(seat)
             activeSeatSequence.removeAll { $0 == seat }
+            if activeSeatSequence.count == 1 {
+                triggerFoldOut()
+                return
+            }
         }
 
         betLevelThisStreet = actionsThisStreet.filter {
@@ -336,6 +350,28 @@ struct HandEntryView: View {
         syncSeatActions()
         if advancing { advanceHighlight() }
         checkStreetClose()
+    }
+
+    private func triggerFoldOut() {
+        if let winner = activeSeatSequence.first {
+            handCloseSummary = (winner == heroSeat) ? "You win" : "Seat \(winner + 1) wins"
+        }
+        saveCurrentHand(outcome: nil)
+        villainCardEntryEnabled = false
+        phase = .handClosed
+        highlightedSeat = nil
+    }
+
+    private func resolveShowdown(outcome: Outcome) {
+        switch outcome {
+        case .win:  handCloseSummary = "You win"
+        case .lose: handCloseSummary = "You lose"
+        case .chop: handCloseSummary = "Chop"
+        }
+        saveCurrentHand(outcome: outcome)
+        villainCardEntryEnabled = true
+        phase = .handClosed
+        highlightedSeat = nil
     }
 
     private func syncSeatActions() {
@@ -380,7 +416,6 @@ struct HandEntryView: View {
         let activePlayers = activeSeatSequence
 
         if activePlayers.count == 1 {
-            // TODO: Phase 05 fold-out
             return
         }
 
@@ -435,7 +470,6 @@ struct HandEntryView: View {
             if activePlayers.count >= 2 {
                 phase = .showdown
             }
-            // activePlayers.count == 1 handled above (TODO: Phase 05 fold-out)
         } else {
             closeStreet()
         }
@@ -526,17 +560,7 @@ struct HandEntryView: View {
         checkStreetClose()
     }
 
-    // MARK: - Phase 01 Helpers
-
-    private func seatStateAction(from actionType: ActionType) -> SeatState.Action {
-        switch actionType {
-        case .fold:  return .fold
-        case .check: return .check
-        case .call:  return .call
-        case .open:  return .open
-        case .raise: return .raise
-        }
-    }
+    // MARK: - Helpers
 
     private func positionFor(seat: Int) -> String {
         guard let btn = buttonSeat else { return "?" }
@@ -747,41 +771,6 @@ struct HandEntryView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Save Bar (kept — replaced in body by ActionControllerBar)
-
-    private var saveBar: some View {
-        HStack(spacing: 12) {
-            Button(action: resetHand) {
-                Text("Clear Hand")
-                    .font(.custom("Arial", size: 14))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(Color.textMuted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(Color.surface2)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-            .buttonStyle(.plain)
-
-            Button(action: saveHand) {
-                Text("Save Hand →")
-                    .font(.custom("Arial", size: 15))
-                    .fontWeight(.bold)
-                    .foregroundStyle(Color(hex: "#0D0D0D"))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(
-                        LinearGradient(colors: [Color.gold, Color(hex: "#9A6820")],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 24)
-    }
-
     // MARK: - Slot Helpers
 
     enum SlotID: Equatable {
@@ -880,10 +869,19 @@ struct HandEntryView: View {
         activeSeatSequence = []
         foldedSeats = []
         highlightedSeat = nil
+        villainCardEntryEnabled = false
+        villainShowdownCards = [:]
+        activeVillainSeat = nil
+        villainPickingRank = nil
+        handCloseSummary = ""
         phase = .placingButton
     }
 
-    private func saveHand() {
+    private func saveCurrentHand(outcome: Outcome?) {
+        var streetsToSave = streets
+        if !actionsThisStreet.isEmpty {
+            streetsToSave.append(Street(name: currentStreet, boardCards: [], actions: actionsThisStreet))
+        }
         let hand = Hand(
             sessionId: session.id,
             handNumber: handNumber,
@@ -892,20 +890,21 @@ struct HandEntryView: View {
             buttonSeatIndex: buttonSeat ?? 0,
             activeSeatIndices: activeSeatSequence,
             holeCards: buildHeroCards(),
-            streets: streets,
-            outcome: nil,
+            streets: streetsToSave,
+            outcome: outcome,
             potSize: nil,
             potUnit: session.potUnit,
             effectiveStack: nil,
             commentary: nil
         )
         savedHands.append(hand)
-        handNumber += 1
-        resetHand()
     }
 
     private func startNewHand() {
         let prevButton = buttonSeat ?? 0
+        if phase == .showdown {
+            saveCurrentHand(outcome: nil)
+        }
         handNumber += 1
         resetHand()
         let allSeats = (0..<tableSize).map { $0 }
@@ -1145,4 +1144,72 @@ struct CardSlotView: View {
         session: Session(type: .cash, name: "Bellagio 2/5", date: Date(), tableSize: 9, heroSeatIndex: 0),
         onBack: {}
     )
+}
+
+// MARK: - Showdown Overlay
+
+private struct ShowdownOverlay: View {
+    let onResolve: (Outcome) -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.65)
+                .ignoresSafeArea()
+
+            VStack(spacing: 20) {
+                Text("SHOWDOWN")
+                    .font(.custom("Georgia", size: 22))
+                    .fontWeight(.black)
+                    .foregroundStyle(Color.gold)
+                    .tracking(2)
+
+                HStack(spacing: 12) {
+                    Button(action: { onResolve(.win) }) {
+                        Text("Win")
+                            .font(.custom("Arial", size: 14))
+                            .fontWeight(.bold)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.winGreen)
+                            .foregroundStyle(Color.black)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: { onResolve(.lose) }) {
+                        Text("Lose")
+                            .font(.custom("Arial", size: 14))
+                            .fontWeight(.bold)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.foldRed)
+                            .foregroundStyle(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: { onResolve(.chop) }) {
+                        Text("Chop")
+                            .font(.custom("Arial", size: 14))
+                            .fontWeight(.bold)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.surface2)
+                            .foregroundStyle(Color.gold)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gold.opacity(0.5), lineWidth: 1.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.borderDark, lineWidth: 1))
+            )
+            .padding(24)
+        }
+    }
 }

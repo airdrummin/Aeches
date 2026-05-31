@@ -9,7 +9,7 @@ Read this before writing any code, designing any view, or making any architectur
 
 Aeches is an iOS-only app built around two tightly coupled pillars:
 
-1. **A hand history recorder** — a tap, swipe, and hold-based UI that lets poker players document hands faster than any existing solution. Zero typing required for a standard hand. Designed for one thumb, mid-session at a live table.
+1. **A hand history recorder** — a tap-based UI that lets poker players document hands faster than any existing solution. Zero typing required for a standard hand. Designed for one thumb, mid-session at a live table.
 
 2. **A pro content marketplace** — poker professionals sell access to their hand histories via monthly subscriptions or à la carte session purchases, including live tournament runs.
 
@@ -22,14 +22,18 @@ Aeches is an iOS-only app built around two tightly coupled pillars:
 ## Design System
 
 ### Colors
-- Background: near-black (e.g. `#0A0A0A` or `#111111`)
-- Primary accent: gold (e.g. `#C9A84C` or `#D4AF37`)
-- Secondary text: muted gray
-- Surface/card: dark gray (e.g. `#1A1A1A` or `#1C1C1E`)
-- Error/fold: subtle red
-- Success/win: subtle green
+- Background: near-black (`#0D0D0D`)
+- Surface / card: dark gray (`#161616`, `#1E1E1E`, `#252525`)
+- Primary accent: gold (`#C9A84C`)
+- Light gold: `#E8D5A3`
+- Body text: `#DDDDDD`
+- Muted text: `#888888`
+- Border: `#3A3A3A`
+- Fold / error: `#C0392B`
+- Win / success: `#27AE60`
+- Felt green: `#1B3A2D`
 
-**Dark mode is the default and only mode for v1.0.**
+**Dark mode is the only mode. No light mode adaptations.**
 
 ### Typography
 - Headings / Display: **Georgia** (serif) — matches the HH monogram logo elegance
@@ -62,15 +66,18 @@ Bottom tab bar with 4 tabs:
 
 Pro-specific screens live inside the Profile tab — standard users and pros share the same tab bar.
 
+History, Marketplace, and Profile are placeholder stubs. Record is fully implemented.
+
 ---
 
 ## Core Feature: Hand Entry UI
 
 ### Screen Architecture
+
 The hand entry screen is a single persistent view split into two independently operating halves. The screen never navigates away during a hand — everything happens in place.
 
 **Top half — Table**
-A geometric oval poker table with gold leather rail, felt surface, and numbered seat buttons. Used to record all table action: dealer button placement, seat actions (fold/call/raise), and villain interaction. The table stays visible at all times.
+A geometric oval poker table with gold leather rail, felt surface, and numbered seat buttons. Used to set the dealer button, record seat actions, and view action states. The table stays visible at all times.
 
 **Bottom half — Cards**
 A persistent strip showing all 7 card slots at once:
@@ -79,42 +86,73 @@ A persistent strip showing all 7 card slots at once:
 - Turn: 1 slot
 - River: 1 slot
 
-Both halves operate independently. The user can fill in cards before recording action, record action without entering cards, or interleave them freely. There is no prescribed order.
+Both halves operate independently. The user can fill in cards before recording action, record action without entering cards, or interleave them freely.
 
 ### Screen Flow (within Record tab)
-1. **Session creation** — select Cash Game or Tournament, fill in details
-2. **Hand entry screen** loads — table visible, card strip visible
-3. **Phase 1: Select seat** — tap any seat to lock in as hero (YOU). Seat stays locked for the entire session.
-4. **Phase 2: Place dealer button** — tap any seat to place the D button for this hand
-5. **Phase 3: Recording** — both halves active. Record in any order:
-   - Tap seats to record action (cycles: call → raise → fold → clear)
-   - Tap card slots to enter hole cards, flop, turn, river
-6. **Save Hand** — hand saved, table resets for Hand #2. Hero seat remains locked.
+
+1. **Session creation** — select Cash Game or Tournament, fill in details. Session creates and loads the hand entry screen.
+
+2. **Select seat** — tap any seat to lock in as hero (YOU). A table size picker (6 / 8 / 9 / 10) lets you correct the seat count. Seat stays locked for the entire session.
+
+3. **Place dealer button** — tap any seat to set the dealer for this hand. The first highlight (UTG, or BB in short-handed games) appears automatically. Phase transitions to Recording.
+
+4. **Recording** — both halves are active simultaneously. Two independent input paths coexist:
+   - **Action Controller Bar** (bottom bar): primary action input. Context-aware buttons:
+     - Bet context (preflop, or any street with an open bet): **Fold / Call / Raise**
+     - No-bet context (post-flop, no aggression yet): **Check / Bet**
+     - Back arrow: undoes the last recorded action
+     - Forward arrow (preflop only): folds the currently highlighted seat and advances to the next
+   - **Direct seat tap**: tapping any seat cycles its action state. Bet context: none → Call → Raise → Fold → clear. No-bet context: none → Check → Bet → clear. Tapping a seat ahead of the current highlight auto-folds any skipped seats clockwise between.
+   - **Card strip** (bottom half): tap any slot to open the inline card picker. Rank grid first (A K Q J T 9 8 7 6 5 4 3 2), then suit (♠ ♥ ♦ ♣ + unknown). Suit is always optional. Picker auto-advances to next empty slot after each entry.
+
+5. **Street progression** — when all active players have acted on a street, the street closes automatically. State resets for the next street (actions cleared, bet level reset, highlight moves to first active seat left of dealer). The Action Controller Bar label updates: Preflop → Flop → Turn → River.
+
+6. **Hand close** — two paths:
+   - **Fold-out**: when all but one player folds at any point, the hand closes immediately. No user action required.
+   - **Showdown**: when the river closes with 2+ active players, a **Win / Lose / Chop** overlay appears centered on the table. Tap the outcome to close.
+
+7. **Summary state** — the hand stays on its number (e.g. "Hand #2") with an outcome summary in the status line and a colored dot:
+   - Green dot + "You win"
+   - Red dot + "You lose"
+   - Gold dot + "Chop"
+   - Muted dot + "Seat X wins" (fold-out where hero already folded)
+   The "New Hand →" button is now active in the Action Controller Bar.
+
+8. **New Hand →** — tap to advance. Hand number increments to #3, state resets, phase returns to placing the dealer button. Hero seat stays locked for the session.
 
 ### Table Design
-- Gold leather rail with a clean gap at 12 o'clock for the house dealer station
-- DEALER label sits centered in the gap
-- Green felt surface with radial gradient and stitching ring
+
+- Gold leather rail with a gap at 12 o'clock for the house dealer station
+- **DEALER** label centered in the gap
+- Green felt surface with radial gradient, brass pinstripe, and stitching ring
 - HH monogram watermark on felt
-- Supports 6, 8, 9, and 10-seat configurations — set at session start, displayed with a size picker
-- Seat buttons show action state visually: gold for aggressor, green for call, red for fold
+- Supports 6, 8, 9, and 10-seat configurations — configurable per session and adjustable on the seat-select screen
+- Seat buttons show action state visually:
+  - Gold border + ↑↑ arrows: aggressor. Arrow count reflects bet level (↑↑ = open, ↑↑↑ = 3-bet, ↑↑↑↑ = 4-bet+)
+  - Green border + ✓: call
+  - Green border + —: check
+  - Red border + ✕: fold
+  - Gold pulsing ring: currently highlighted seat (action on them)
+  - Green fill + YOU label: hero seat
 
 ### Card Entry
-- Tap any card slot → rank grid appears in-line (A K Q J T 9 8 7 6 5 4 3 2)
-- Tap a rank → suit options appear (♠ ♥ ♦ ♣ + unknown)
+
+- Tap any card slot → rank grid appears (A K Q J T 9 8 7 6 5 4 3 2)
+- Tap a rank → suit options appear (♠ ♥ ♦ ♣ + unknown ?)
 - Suit is always optional — tap "?" to record rank only
-- For hole cards, `s` (suited) and `o` (offsuit) shortcuts available after first rank
+- For hole cards, `s` (suited) and `o` (offsuit) shortcuts available after selecting the first rank
 - Accepted notation formats: `AK`, `AKo`, `AKs`, `AhKs`, `AxKs`
 - After entering a card, picker auto-advances to the next empty slot
 - Tap "Clear" to remove a card, "Done" to dismiss picker
 
-### Villain Profiles
+### Villain Profiles *(not yet implemented)*
+
 - Quick tags: OMC, LAG, TAG, Fish, Reg, Unknown
 - Custom text descriptor (e.g. "middle aged guy with headphones")
 - Running notes field — add reads throughout the session
 - Villain profiles persist across all hands within a session
 - Swipe left on a seat to bust/clear a player — hands already recorded retain original descriptor
-- Villain hole cards entered via their seat (showdown only)
+- Villain hole cards entered via their seat tap (showdown only)
 - Villain notes are session-only — do not persist to future sessions
 
 ### Supported Game Formats (v1.0)
@@ -132,7 +170,7 @@ Both halves operate independently. The user can fill in cards before recording a
 
 ---
 
-## Pro Marketplace
+## Pro Marketplace *(not yet implemented)*
 
 ### Creator Model
 - **Open marketplace** — no application, no credential review, no minimum following
@@ -175,7 +213,7 @@ Both halves operate independently. The user can fill in cards before recording a
 
 ---
 
-## Notifications
+## Notifications *(not yet implemented)*
 
 - Push notifications on by default for all subscribed pros
 - User can configure per-pro from the pro's profile page
@@ -195,21 +233,30 @@ Both halves operate independently. The user can fill in cards before recording a
 
 ## MVP v1.0 Scope
 
-### In Scope
-- Unified hand entry screen — table top half, card strip bottom half, both independent
+### Implemented
+- Full hand recording engine — `HandEntryView.swift`
 - Geometric table oval with gold rail, felt, gap at dealer station, 6/8/9/10-seat support
 - Session-locked hero seat, per-hand dealer button placement
-- Tap-to-cycle seat actions (call / raise / fold)
+- Phase system: selectSeat → placingButton → recordingHand → showdown → handClosed
+- Action Controller Bar: Fold/Call/Raise (bet context), Check/Bet (no bet), undo, forward skip
+- Direct seat tap cycling with auto-fold of skipped seats
+- Street close detection (preflop BB close, post-flop all-acted, raise-then-respond)
+- Automatic street progression: preflop → flop → turn → river
+- Fold-out detection (last player standing wins, hand closes immediately)
+- Showdown overlay (Win / Lose / Chop) triggered on river close with 2+ players
+- Hand outcome summary state with colored status dot and descriptive text
+- `handNumber` single source of truth — advances only on "New Hand →" tap
 - Inline card picker — rank then suit, suit optional, auto-advances to next empty slot
 - Suited/offsuit shortcuts for hole cards
-- Flexible hole card notation: AK, AKo, AKs, AhKs, AxKs
+- Raise arrow level display (1 = open ↑↑, 2 = 3-bet ↑↑↑, 3 = 4-bet ↑↑↑↑)
+- New Session screen (Cash / Tournament)
+- Login screen (auth buttons wired to state, full auth not yet implemented)
+
+### Remaining for v1.0
 - Villain profiles with session persistence and swipe-to-bust
-- Villain hole cards entered via seat tap (showdown only)
-- Manual session creation (Cash + Tournament)
-- Optional stack size per hand
-- Single commentary field per hand
-- Personal hand history (local + cloud sync, offline-first)
-- Login screen with Sign in with Apple, Google, Email + Password
+- Villain hole cards entered via seat tap (showdown)
+- Full auth: Sign in with Apple, Google, Email + Password
+- Personal hand history screen (History tab)
 - Pro profiles with Live and Past sections
 - Open self-serve Pro marketplace
 - Twitter/X verification + verified badge
@@ -221,8 +268,8 @@ Both halves operate independently. The user can fill in cards before recording a
 - Watermark content protection
 - Push notifications with per-pro controls
 - Full fee transparency in creator dashboard
+- Cloud sync for hand histories (offline-first, sync in background)
 - Chance Kornuth and Alex Foxen as founding pro accounts
-- iOS only
 
 ### Out of Scope for v1.0
 - PLO support
@@ -240,10 +287,25 @@ Both halves operate independently. The user can fill in cards before recording a
 - **Platform:** iOS only, SwiftUI
 - **Language:** Swift
 - **Bundle ID:** com.airdrummin.Aeches
+- **Architecture:** All hand recording state is local to `HandEntryView` and its child components. No `@EnvironmentObject` or observable context layer.
 - **Offline-first:** All recording works without network. Sync is background/silent.
 - **In-app purchases:** App Store IAP for subscriptions and à la carte purchases
-- **Storage:** Cloud sync for hand histories (provider TBD — likely Firebase or CloudKit)
-- **Privacy:** Standard user hand histories are always private. Pro content visible to paying subscribers only. No public browsing of hand history content.
+- **Storage:** Cloud sync for hand histories (provider TBD — likely Firebase or CloudKit). In-memory only during development.
+- **Privacy:** Standard user hand histories are always private. Pro content visible to paying subscribers only.
+
+---
+
+## File Structure (key files)
+
+| File | Purpose |
+|---|---|
+| `Aeches/HandEntryView.swift` | Full hand recording engine, Action Controller Bar, card picker, all phase logic |
+| `Aeches/SeatSelectionView.swift` | Shared components only: `TableOvalView`, `SeatButtonView`, `SeatState`, `seatPosition()` |
+| `Aeches/Models.swift` | All data models and enums. `calculatePositions()` for position labels. Do not modify. |
+| `Aeches/ContentView.swift` | Tab bar, `RecordTab`, design tokens (`Color` extensions) |
+| `Aeches/NewSessionView.swift` | Session creation screen |
+| `Aeches/LoginView.swift` | Auth screen |
+| `Aeches/AechesApp.swift` | App entry point, auth gate |
 
 ---
 
@@ -265,19 +327,20 @@ Suit is always `Suit?` on a card — `nil` means the suit was not recorded.
 A preflop call with no raise in front (a "limp") is stored as `.call` — the display layer may label it "Limp" contextually.
 
 **`VillainTag`**
-`.omC .lag .tag .fish .reg .unknown`
+`.omc .lag .tag .fish .reg .unknown`
 
 **`StreetName`**
 `.preflop .flop .turn .river`
+Extension `next()` on `StreetName` is defined in `HandEntryView.swift`.
 
 **`Outcome`**
 `.win .lose .chop`
 
 **`PotUnit`**
 `.bigBlinds .dollars .chips`
-`.dollars` — used in cash game sessions, always renders with `$` prefix.
-`.chips` — used in tournament sessions, renders as a plain number (no `$`).
-The app sets `.dollars` or `.chips` automatically based on session type — the user never chooses.
+`.dollars` — cash game sessions, renders with `$` prefix.
+`.chips` — tournament sessions, renders as a plain number.
+Set automatically from session type — the user never chooses directly.
 
 **`SizingType`**
 `.multiple` — e.g. 2x, 2.5x
@@ -305,13 +368,15 @@ value:  Double?     // nil for named presets like "Pot"
 label:  String      // display string e.g. "2x", "½ Pot", "14BB", "$120"
 ```
 
+`RaiseSizing` is `nil` on all `Action` records in the current build. Sizing entry is a future enhancement.
+
 ### Action
 ```
 id:         UUID
 seatIndex:  Int           // 0-based seat index
 position:   String        // frozen label e.g. "BTN", "UTG" — calculated at record time
 actionType: ActionType
-sizing:     RaiseSizing?  // nil unless action is open/raise
+sizing:     RaiseSizing?  // nil in current build
 ```
 
 ### Street
@@ -328,48 +393,45 @@ id:          UUID
 seatIndex:   Int
 tag:         VillainTag?
 descriptor:  String?      // e.g. "middle aged guy with headphones"
-notes:       String?      // running reads added during session
+notes:       String?      // running reads, updated during session
 isActive:    Bool         // false = busted out or left the table
 ```
 
 ### Hand
 ```
-id:              UUID
-sessionId:       UUID
-handNumber:      Int
-title:           String?
-timestamp:       Date
-heroSeatIndex:   Int
-buttonSeatIndex: Int
-activeSeatIndices: [Int]  // which seats were occupied this hand
-holeCards:       [Card]   // hero's hole cards, 0-2 cards
-streets:         [Street] // preflop through river, only streets that were played
-outcome:         Outcome?
-potSize:         Double?
-potUnit:         PotUnit?
-effectiveStack:  Double?  // optional, in same unit as potUnit
-commentary:      String?
+id:               UUID
+sessionId:        UUID
+handNumber:       Int
+title:            String?
+timestamp:        Date
+heroSeatIndex:    Int
+buttonSeatIndex:  Int
+activeSeatIndices: [Int]  // occupied seats this hand — drives position label calculation
+holeCards:        [Card]  // hero's hole cards, 0–2
+streets:          [Street] // only streets that were played
+outcome:          Outcome? // nil if hand abandoned or outcome not recorded
+potSize:          Double?
+potUnit:          PotUnit?
+effectiveStack:   Double?  // optional, in same unit as potUnit
+commentary:       String?
 ```
-
-### Villain (session-level)
-Villains are stored on the Session, not on individual hands. Each hand references villain info via seatIndex. Villain notes persist for the life of the session only — not across sessions.
 
 ### Session
 ```
-id:          UUID
-type:        SessionType
-name:        String        // cash game name or tournament name
-date:        Date
-tableSize:   Int           // 6, 8, 9, or 10 — fixed for the session
-heroSeatIndex: Int         // locked for the session
-stakes:      String?       // cash only e.g. "2/5"
-buyIn:       Double?       // tournament only
-bullet:      Int?          // tournament only — rebuy count
-startingStack: Double?     // cash only, optional
-villains:    [Villain]     // keyed to seat indices, session-scoped
-hands:       [Hand]
-startedAt:   Date
-endedAt:     Date?
+id:            UUID
+type:          SessionType
+name:          String        // cash game name or tournament name
+date:          Date
+tableSize:     Int           // 6, 8, 9, or 10 — fixed for the session
+heroSeatIndex: Int           // locked for the session
+stakes:        String?       // cash only e.g. "2/5"
+buyIn:         Double?       // tournament only
+bullet:        Int?          // tournament only — rebuy count
+startingStack: Double?       // cash only, optional
+villains:      [Villain]     // session-scoped, keyed by seatIndex
+hands:         [Hand]
+startedAt:     Date
+endedAt:       Date?
 ```
 
 ---
@@ -381,3 +443,5 @@ Position labels (BTN, SB, BB, UTG, etc.) are calculated at hand record time from
 - `activeSeatIndices` on the hand
 
 Labels are assigned based on the **active seat count only** — empty seats are skipped entirely and do not consume a position slot. A 6-handed active game gets exactly 6 labels (BTN, SB, BB, UTG, HJ, CO). A 9-handed game gets the full set. Labels are stored frozen on each `Action` at the moment of recording.
+
+`calculatePositions(buttonSeatIndex:activeSeatIndices:)` is a free function in `Models.swift` and is the single source of truth for all position label logic.
