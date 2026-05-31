@@ -66,10 +66,7 @@ struct HandEntryView: View {
     private var seatActionsFromStreet: [Int: SeatState] {
         var result: [Int: SeatState] = [:]
         for action in actionsThisStreet {
-            result[action.seatIndex] = SeatState(
-                action: seatStateAction(from: action.actionType),
-                sizeLabel: nil
-            )
+            result[action.seatIndex] = SeatState(action: seatStateAction(from: action.actionType))
         }
         return result
     }
@@ -342,7 +339,23 @@ struct HandEntryView: View {
     }
 
     private func syncSeatActions() {
-        seatActions = seatActionsFromStreet
+        var result: [Int: SeatState] = [:]
+        for action in actionsThisStreet {
+            let seatAction: SeatState.Action
+            switch action.actionType {
+            case .fold:  seatAction = .fold
+            case .call:  seatAction = .call
+            case .check: seatAction = .check
+            case .open:  seatAction = .open
+            case .raise: seatAction = .raise
+            }
+            let levelAtThisPoint = actionsThisStreet
+                .prefix(while: { $0.id != action.id })
+                .filter { $0.actionType == .open || $0.actionType == .raise }
+                .count + (action.actionType == .open || action.actionType == .raise ? 1 : 0)
+            result[action.seatIndex] = SeatState(action: seatAction, betLevel: levelAtThisPoint)
+        }
+        seatActions = result
     }
 
     // MARK: - Undo

@@ -283,7 +283,7 @@ struct TableOvalView: View {
 struct SeatState {
     enum Action { case fold, call, check, open, raise }
     var action: Action?
-    var sizeLabel: String?
+    var betLevel: Int = 0
 }
 
 struct SeatButtonView: View {
@@ -327,8 +327,14 @@ struct SeatButtonView: View {
         case .fold:   return "✕"
         case .call:   return "✓"
         case .check:  return "—"
-        case .open:   return "↑"
-        case .raise:  return state?.sizeLabel ?? "↑↑"
+        case .open, .raise:
+            let level = state?.betLevel ?? 1
+            switch level {
+            case 1:  return "↑↑"
+            case 2:  return "↑↑↑"
+            case 3:  return "↑↑↑↑"
+            default: return "↑"
+            }
         case nil:     return "\(index + 1)"
         }
     }
