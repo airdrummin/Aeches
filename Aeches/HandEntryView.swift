@@ -276,9 +276,41 @@ struct HandEntryView: View {
             phase = .recordingHand
 
         case .recordingHand:
-            let currentAction = seatActions[seat]?.action
-            let isBetContext = currentStreet == .preflop || openBetExists
+            // isJump: user tapped a different active seat — they're leaving the current actor.
+            let isJump = seat != highlightedSeat && activeSeatSequence.contains(seat)
 
+            if isJump {
+                // Auto-fold the seat we're leaving (if it never acted) plus any skipped seats.
+                var toFold: [Int] = []
+                if let hs = highlightedSeat,
+                   activeSeatSequence.contains(hs),
+                   !actionsThisStreet.contains(where: { $0.seatIndex == hs }) {
+                    toFold.append(hs)
+                }
+                toFold += seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
+                autoFoldSeats(toFold)
+
+                // Evaluate the round on the PRE-tap state. If the previous actor already
+                // closed it (e.g. BB called to end preflop), this tap advances the street.
+                if streetIsClosed() {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        advanceStreetOrShowdown()
+                    }
+                    // If the same tap landed on the first actor of the new street, fall through
+                    // and record that seat's first action too — one tap both advances AND acts,
+                    // so seat-tapping alone is a complete input path. Otherwise (showdown opened,
+                    // or a different seat opens the street) consume the tap as advance-only.
+                    guard phase == .recordingHand, highlightedSeat == seat else { return }
+                }
+            }
+
+            // Cycle the tapped seat's action. A direct tap NEVER closes the street itself —
+            // closing happens only when the user moves on (a later jump) or via the action bar.
+            // This lets the user keep changing their mind (call → raise → fold) on a live seat.
+            // Context is recomputed here so it reflects any street advance that just happened
+            // (preflop is always bet-context; a fresh post-flop street opens with no bet).
+            let isBetContext = currentStreet == .preflop || openBetExists
+            let currentAction = seatActions[seat]?.action
             let nextActionType: ActionType?
             if isBetContext {
                 switch currentAction {
@@ -294,17 +326,6 @@ struct HandEntryView: View {
                 case .check:          nextActionType = .open
                 default:              nextActionType = nil
                 }
-            }
-
-            if seat != highlightedSeat, activeSeatSequence.contains(seat) {
-                var toFold: [Int] = []
-                if let hs = highlightedSeat,
-                   activeSeatSequence.contains(hs),
-                   !actionsThisStreet.contains(where: { $0.seatIndex == hs }) {
-                    toFold.append(hs)
-                }
-                toFold += seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
-                autoFoldSeats(toFold)
             }
 
             withAnimation(.easeInOut(duration: 0.15)) {
@@ -373,8 +394,10 @@ struct HandEntryView: View {
         }.count
 
         syncSeatActions()
-        if advancing { advanceHighlight() }
-        checkStreetClose()
+        if advancing {
+            advanceHighlight()
+            checkStreetClose()
+        }
     }
 
     private func triggerFoldOut() {
@@ -444,67 +467,63 @@ struct HandEntryView: View {
 
     // MARK: - Street Close Detection
 
-    private func checkStreetClose() {
+    /// Pure predicate — has the current betting round completed? Does NOT mutate state.
+    /// Preflop: BB is the last voluntary actor. In an unraised (limped) pot the street
+    /// closes once BB has acted; in a raised pot every active seat except the last
+    /// aggressor must have called or folded after that aggressor's raise (BB included,
+    /// since BB is active and acts last).
+    private func streetIsClosed() -> Bool {
         let activePlayers = activeSeatSequence
 
-        if activePlayers.count == 1 {
-            return
-        }
-
-        guard !activePlayers.isEmpty else { return }
+        // One player left is a fold-out, handled separately — not a street close.
+        if activePlayers.count <= 1 { return false }
 
         let aggressorIndices = actionsThisStreet.indices.filter {
             actionsThisStreet[$0].actionType == .open || actionsThisStreet[$0].actionType == .raise
         }
 
-        var closed = false
-
-        if currentStreet == .preflop {
-            if aggressorIndices.isEmpty {
-                // No raise: close when BB has acted
-                if let bb = bbSeat() {
-                    closed = actionsThisStreet.contains { $0.seatIndex == bb }
-                }
+        if aggressorIndices.isEmpty {
+            // No aggression this street.
+            if currentStreet == .preflop {
+                // Limped pot: closes once BB (last to act) has acted.
+                guard let bb = bbSeat() else { return false }
+                return actionsThisStreet.contains { $0.seatIndex == bb }
             } else {
-                let lastIdx = aggressorIndices.last!
-                let lastAggressor = actionsThisStreet[lastIdx]
-                let respondedAfter = Set(
-                    actionsThisStreet[(lastIdx + 1)...]
-                        .filter { $0.actionType == .call || $0.actionType == .fold }
-                        .map { $0.seatIndex }
-                )
-                closed = activePlayers
-                    .filter { $0 != lastAggressor.seatIndex }
-                    .allSatisfy { respondedAfter.contains($0) }
+                // Post-flop check-around: every active player must have acted.
+                let actedSeats = Set(actionsThisStreet.map { $0.seatIndex })
+                return activePlayers.allSatisfy { actedSeats.contains($0) }
             }
         } else {
-            // Post-flop: everyone must have acted since the last open/raise
-            if aggressorIndices.isEmpty {
-                let actedSeats = Set(actionsThisStreet.map { $0.seatIndex })
-                closed = activePlayers.allSatisfy { actedSeats.contains($0) }
-            } else {
-                let lastIdx = aggressorIndices.last!
-                let lastAggressor = actionsThisStreet[lastIdx]
-                let respondedAfter = Set(
-                    actionsThisStreet[(lastIdx + 1)...]
-                        .filter { $0.actionType == .call || $0.actionType == .fold }
-                        .map { $0.seatIndex }
-                )
-                closed = activePlayers
-                    .filter { $0 != lastAggressor.seatIndex }
-                    .allSatisfy { respondedAfter.contains($0) }
-            }
+            // Bet/raise present: every active seat except the last aggressor must have
+            // called or folded after the last aggressive action.
+            let lastIdx = aggressorIndices.last!
+            let lastAggressor = actionsThisStreet[lastIdx]
+            let respondedAfter = Set(
+                actionsThisStreet[(lastIdx + 1)...]
+                    .filter { $0.actionType == .call || $0.actionType == .fold }
+                    .map { $0.seatIndex }
+            )
+            return activePlayers
+                .filter { $0 != lastAggressor.seatIndex }
+                .allSatisfy { respondedAfter.contains($0) }
         }
+    }
 
-        guard closed else { return }
-
+    /// Close the current street (or open the showdown on a completed river).
+    private func advanceStreetOrShowdown() {
         if currentStreet == .river {
-            if activePlayers.count >= 2 {
+            if activeSeatSequence.count >= 2 {
                 phase = .showdown
             }
         } else {
             closeStreet()
         }
+    }
+
+    /// Used by the Action Controller Bar (committed actions): close immediately if done.
+    private func checkStreetClose() {
+        guard streetIsClosed() else { return }
+        advanceStreetOrShowdown()
     }
 
     // Returns the BB's seat index based on the full table layout (position-stable across folds).
@@ -544,10 +563,15 @@ struct HandEntryView: View {
         return Array(sorted[offset...]) + Array(sorted[..<offset])
     }
 
+    /// Seats from `seats` that lie strictly clockwise-between `from` and `to`.
+    /// Anchored on the FULL table ring so it is safe even when `from` has already
+    /// folded out of `seats` (clockwise position is defined by the table, not the
+    /// active subset). Avoids the `1..<0` range crash when `from` is not in `seats`.
     private func seatsStrictlyBetween(from: Int, to: Int, in seats: [Int]) -> [Int] {
-        let ordered = clockwiseOrder(from: from, seats: seats)
-        guard let toIdx = ordered.firstIndex(of: to) else { return [] }
-        return Array(ordered[1..<toIdx])
+        guard from != to else { return [] }
+        let ring = clockwiseOrder(from: from, seats: Array(0..<tableSize))
+        guard let toIdx = ring.firstIndex(of: to), toIdx >= 1 else { return [] }
+        return ring[1..<toIdx].filter { seats.contains($0) }
     }
 
     private func autoFoldSeats(_ seats: [Int]) {

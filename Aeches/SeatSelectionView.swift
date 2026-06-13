@@ -273,11 +273,14 @@ struct SeatButtonView: View {
     private var borderColor: Color {
         if isFoldedOut { return Color(hex: "#2A2A2A") }
         if isActive { return Color.white }
+        if isHero {
+            return state?.action == .fold ? Color.foldRed : Color.goldLight
+        }
         switch state?.action {
         case .fold:          return Color.foldRed
         case .call, .check:  return Color.winGreen
         case .open, .raise:  return Color.gold
-        case nil:            return isHero ? Color.goldLight : Color(hex: "#444444")
+        case nil:            return Color(hex: "#444444")
         case .foldedOut:     return Color(hex: "#2A2A2A")
         }
     }
@@ -297,14 +300,16 @@ struct SeatButtonView: View {
         case .fold:   return "✕"
         case .call:   return "✓"
         case .check:  return "—"
-        case .open, .raise:
+        case .open:
+            // A bet — the first wager on a post-flop street (no prior aggression).
+            // Distinct glyph from a raise so "opened the betting" reads at a glance.
+            return "→"
+        case .raise:
+            // A raise over an existing wager (the preflop open-raise is a raise over the
+            // blind, level 1). Arrow count scales with bet level: ↑↑ open/raise, ↑↑↑ 3-bet,
+            // ↑↑↑↑ 4-bet, etc.
             let level = state?.betLevel ?? 1
-            switch level {
-            case 1:  return "↑↑"
-            case 2:  return "↑↑↑"
-            case 3:  return "↑↑↑↑"
-            default: return "↑"
-            }
+            return String(repeating: "↑", count: level + 1)
         case .foldedOut: return position ?? "\(index + 1)"
         case nil:        return position ?? "\(index + 1)"
         }
@@ -348,7 +353,7 @@ struct SeatButtonView: View {
                 Text(label)
                     .font(.system(size: state == nil || isFoldedOut ? 11 : 13, weight: .bold, design: .rounded))
                     .foregroundStyle(labelColor)
-                if isHero && state == nil {
+                if isHero && !isFoldedOut {
                     Text("YOU")
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(Color.goldLight.opacity(0.8))

@@ -128,7 +128,8 @@ Both halves operate independently. The user can fill in cards before recording a
 - HH monogram watermark on felt
 - Supports 6, 8, 9, and 10-seat configurations — configurable per session and adjustable on the seat-select screen
 - Seat buttons show action state visually:
-  - Gold border + ↑↑ arrows: aggressor. Arrow count reflects bet level (↑↑ = open, ↑↑↑ = 3-bet, ↑↑↑↑ = 4-bet+)
+  - Gold border + →: a bet (first wager on a post-flop street)
+  - Gold border + ↑↑ arrows: a raise. Arrow count reflects bet level (↑↑ = open-raise, ↑↑↑ = 3-bet, ↑↑↑↑ = 4-bet+)
   - Green border + ✓: call
   - Green border + —: check
   - Red border + ✕: fold
@@ -248,7 +249,7 @@ Both halves operate independently. The user can fill in cards before recording a
 - `handNumber` single source of truth — advances only on "New Hand →" tap
 - Inline card picker — rank then suit, suit optional, auto-advances to next empty slot
 - Suited/offsuit shortcuts for hole cards
-- Raise arrow level display (1 = open ↑↑, 2 = 3-bet ↑↑↑, 3 = 4-bet ↑↑↑↑)
+- Aggression symbols: → = post-flop bet, ↑↑ = open-raise, ↑↑↑ = 3-bet, ↑↑↑↑ = 4-bet+ (raise arrows scale with bet level)
 - New Session screen (Cash / Tournament)
 - Login screen (auth buttons wired to state, full auth not yet implemented)
 
