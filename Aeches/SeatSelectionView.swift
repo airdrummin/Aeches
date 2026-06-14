@@ -297,21 +297,70 @@ struct SeatButtonView: View {
 
     private var label: String {
         switch state?.action {
-        case .fold:   return "✕"
-        case .call:   return "✓"
-        case .check:  return "—"
-        case .open:
-            // A bet — the first wager on a post-flop street (no prior aggression).
-            // Distinct glyph from a raise so "opened the betting" reads at a glance.
-            return "→"
-        case .raise:
-            // A raise over an existing wager (the preflop open-raise is a raise over the
-            // blind, level 1). Arrow count scales with bet level: ↑↑ open/raise, ↑↑↑ 3-bet,
-            // ↑↑↑↑ 4-bet, etc.
-            let level = state?.betLevel ?? 1
-            return String(repeating: "↑", count: level + 1)
+        case .fold:      return "✕"
+        case .call:      return "✓"
+        case .check:     return "—"
+        case .open:      return "→"
+        case .raise:     return ""   // handled by raiseArrows view builder
         case .foldedOut: return position ?? "\(index + 1)"
         case nil:        return position ?? "\(index + 1)"
+        }
+    }
+
+    // 2D raise arrow layouts — pattern-recognisable at a glance, inspired by card pips.
+    @ViewBuilder
+    private var actionLabel: some View {
+        if state?.action == .raise {
+            raiseArrows(level: max(1, state?.betLevel ?? 1))
+        } else {
+            Text(label)
+                .font(.system(size: state == nil || isFoldedOut ? 11 : 13, weight: .bold, design: .rounded))
+                .foregroundStyle(labelColor)
+        }
+    }
+
+    @ViewBuilder
+    private func raiseArrows(level: Int) -> some View {
+        switch level {
+        case 1:
+            // 2-bet — ↑↑ side by side (open raise)
+            HStack(spacing: 1) {
+                up(11); up(11)
+            }
+        case 2:
+            // 3-bet — triangle: 1 top, 2 bottom
+            VStack(spacing: 1) {
+                up(10)
+                HStack(spacing: 2) { up(10); up(10) }
+            }
+        case 3:
+            // 4-bet — 2×2 grid
+            VStack(spacing: 1) {
+                HStack(spacing: 2) { up(9); up(9) }
+                HStack(spacing: 2) { up(9); up(9) }
+            }
+        case 4:
+            // 5-bet — arrow + "5" badge upper-right
+            arrowWithBadge("5")
+        default:
+            // 6-bet+ — arrow + numeric badge upper-right
+            arrowWithBadge("\(level + 1)")
+        }
+    }
+
+    private func up(_ size: CGFloat) -> some View {
+        Text("↑")
+            .font(.system(size: size, weight: .bold, design: .rounded))
+            .foregroundStyle(labelColor)
+    }
+
+    private func arrowWithBadge(_ badge: String) -> some View {
+        ZStack {
+            up(12)
+            Text(badge)
+                .font(.system(size: 7, weight: .black, design: .rounded))
+                .foregroundStyle(labelColor)
+                .offset(x: 7, y: -7)
         }
     }
 
@@ -350,9 +399,7 @@ struct SeatButtonView: View {
                 .opacity(isFoldedOut ? 0.35 : 1.0)
 
             VStack(spacing: 1) {
-                Text(label)
-                    .font(.system(size: state == nil || isFoldedOut ? 11 : 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(labelColor)
+                actionLabel
                 if isHero && !isFoldedOut {
                     Text("YOU")
                         .font(.system(size: 7, weight: .bold))

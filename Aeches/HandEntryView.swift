@@ -92,6 +92,94 @@ struct HandEntryView: View {
         )
     }
 
+    /// A fold-out is set up but not yet committed: every seat but one has folded (only reachable
+    /// via direct-tap cycle folds, which don't auto-end the hand). The button commits it.
+    private var pendingFoldOut: Bool {
+        phase == .recordingHand && activeSeatSequence.count == 1
+    }
+
+    /// Active when 2+ players would remain after auto-folding all unresolved seats. If only 1
+    /// would remain the result is a fold-out (no next street), so this stays false — that case
+    /// is handled by `pendingFoldOut` instead.
+    private var canAdvanceStreet: Bool {
+        guard phase == .recordingHand, !pendingFoldOut else { return false }
+        if streetIsClosed() { return true }
+        let wouldStay = activeSeatSequence.filter { !owesAction($0) }
+        return wouldStay.count >= 2
+    }
+
+    /// The button is live either to advance the street or to commit a pending fold-out.
+    private var nextStreetButtonEnabled: Bool {
+        canAdvanceStreet || pendingFoldOut
+    }
+
+    /// Button label: "End Hand" when committing a fold-out, otherwise the next street (River → Showdown).
+    private var nextStreetLabel: String {
+        if pendingFoldOut { return "End Hand" }
+        switch currentStreet {
+        case .preflop: return "Flop"
+        case .flop:    return "Turn"
+        case .turn:    return "River"
+        case .river:   return "Showdown"
+        }
+    }
+
+    // MARK: - Next Street Button (top-right of table)
+
+    private var nextStreetButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                if pendingFoldOut {
+                    // Commit the fold-out the user set up by folding everyone but one seat.
+                    triggerFoldOut()
+                    return
+                }
+                if !streetIsClosed() {
+                    // Fast-forward: auto-fold every seat that still owes an action.
+                    // autoFoldSeats owns the fold-out check — if it fires, we're done.
+                    let didFoldOut = autoFoldSeats(activeSeatSequence.filter { owesAction($0) })
+                    guard !didFoldOut else { return }
+                }
+                advanceStreetOrShowdown()
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(nextStreetLabel)
+                    .font(.custom("Arial", size: 11))
+                    .fontWeight(.bold)
+                    .tracking(0.5)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(nextStreetButtonEnabled ? Color(hex: "#0D0D0D") : Color.textMuted.opacity(0.5))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background {
+                if nextStreetButtonEnabled {
+                    Capsule().fill(
+                        LinearGradient(
+                            colors: [Color.gold, Color(hex: "#9A6820")],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                } else {
+                    Capsule().fill(Color.surface2)
+                }
+            }
+            .overlay(
+                Capsule().stroke(
+                    nextStreetButtonEnabled ? Color.goldLight.opacity(0.6) : Color.borderDark.opacity(0.5),
+                    lineWidth: 1
+                )
+            )
+            .shadow(color: nextStreetButtonEnabled ? Color.gold.opacity(0.4) : .clear, radius: 6)
+        }
+        .buttonStyle(.plain)
+        .disabled(!nextStreetButtonEnabled)
+        .opacity(nextStreetButtonEnabled ? 1.0 : 0.55)
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -170,9 +258,19 @@ struct HandEntryView: View {
                     .padding(.top, 6)
                 }
 
+                // ── Next Street button ────────────────────────────────
+                if phase == .recordingHand {
+                    HStack {
+                        Spacer()
+                        nextStreetButton
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                }
+
                 Divider()
                     .background(Color.borderDark)
-                    .padding(.top, 10)
+                    .padding(.top, 8)
 
                 // ── Bottom half — Card strip ───────────────────────────
                 if phase == .recordingHand || phase == .showdown || phase == .handClosed {
@@ -304,50 +402,69 @@ struct HandEntryView: View {
                 }
             }
 
-            // Cycle the tapped seat's action. A direct tap NEVER closes the street itself —
+            // Record the tapped seat's action. A direct tap NEVER closes the street itself —
             // closing happens only when the user moves on (a later jump) or via the action bar.
-            // This lets the user keep changing their mind (call → raise → fold) on a live seat.
-            // Context is recomputed here so it reflects any street advance that just happened
-            // (preflop is always bet-context; a fresh post-flop street opens with no bet).
-            let isBetContext = currentStreet == .preflop || openBetExists
-            let currentAction = seatActions[seat]?.action
-            let nextActionType: ActionType?
-            if isBetContext {
-                switch currentAction {
-                case nil, .foldedOut: nextActionType = .call
-                case .call:           nextActionType = .raise
-                case .raise, .open:   nextActionType = .fold
-                case .fold:           nextActionType = nil   // 4th tap = clear
-                case .check:          nextActionType = .call // was checked, now faces a bet
+            // The action log is append-only and the single source of truth, so there are two
+            // distinct paths:
+            //   • The seat OWES an action (hasn't acted this street, or faces a bet/raise made
+            //     after its last action) → APPEND a fresh action at the top of the sequence.
+            //     This never disturbs earlier actions, so prior raises keep their frozen levels.
+            //   • Otherwise the seat's last action is its still-live, uncommitted decision →
+            //     cycle it in place (call → raise → fold → clear) by editing only that entry.
+            // Context is per-seat: bet-context iff preflop or this seat faces a wager made by
+            // SOMEONE ELSE. Deliberately NOT `openBetExists` — a seat that opens the betting must
+            // not have its own bet flip the cycle into call/raise/fold, which would fold the
+            // bettor on the next tap (and end the hand heads-up). Its cycle stays check → bet.
+            let isBetContext = currentStreet == .preflop || seatFacesBet(seat)
+
+            if owesAction(seat) {
+                // Fresh action — start at Call (facing a bet) or Check (no bet). Append only.
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    highlightedSeat = seat
+                    applyAction(isBetContext ? .call : .check, advancing: false)
                 }
             } else {
-                switch currentAction {
-                case nil, .foldedOut: nextActionType = .check
-                case .check:          nextActionType = .open
-                default:              nextActionType = nil
-                }
-            }
-
-            withAnimation(.easeInOut(duration: 0.15)) {
-                highlightedSeat = seat
-                if let actionType = nextActionType {
-                    actionsThisStreet.removeAll { $0.seatIndex == seat }
-                    applyAction(actionType, advancing: false)
-                } else {
-                    // Clear: remove action, restore seat if it was folded
-                    let wasFolded = foldedSeats.contains(seat)
-                    actionsThisStreet.removeAll { $0.seatIndex == seat }
-                    if wasFolded {
-                        foldedSeats.remove(seat)
-                        if !activeSeatSequence.contains(seat) {
-                            activeSeatSequence.append(seat)
-                            activeSeatSequence.sort()
-                        }
+                // Edit in place — cycle this seat's most recent action to the next state.
+                let currentAction = seatActions[seat]?.action
+                let nextActionType: ActionType?
+                if isBetContext {
+                    switch currentAction {
+                    case nil, .foldedOut: nextActionType = .call
+                    case .call:           nextActionType = .raise
+                    case .raise, .open:   nextActionType = .fold
+                    case .fold:           nextActionType = nil   // 4th tap = clear
+                    case .check:          nextActionType = .call // was checked, now faces a bet
                     }
-                    betLevelThisStreet = actionsThisStreet.filter {
-                        $0.actionType == .open || $0.actionType == .raise
-                    }.count
-                    syncSeatActions()
+                } else {
+                    switch currentAction {
+                    case nil, .foldedOut: nextActionType = .check
+                    case .check:          nextActionType = .open
+                    default:              nextActionType = nil
+                    }
+                }
+
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    highlightedSeat = seat
+                    if let actionType = nextActionType {
+                        removeLastAction(of: seat)
+                        applyAction(actionType, advancing: false)
+                    } else {
+                        // Clear: remove only this seat's most recent action, restoring it to
+                        // active if that action was the fold that put it out.
+                        let wasFolded = foldedSeats.contains(seat)
+                        removeLastAction(of: seat)
+                        if wasFolded {
+                            foldedSeats.remove(seat)
+                            if !activeSeatSequence.contains(seat) {
+                                activeSeatSequence.append(seat)
+                                activeSeatSequence.sort()
+                            }
+                        }
+                        betLevelThisStreet = actionsThisStreet.filter {
+                            $0.actionType == .open || $0.actionType == .raise
+                        }.count
+                        syncSeatActions()
+                    }
                 }
             }
 
@@ -383,7 +500,10 @@ struct HandEntryView: View {
         if type == .fold {
             foldedSeats.insert(seat)
             activeSeatSequence.removeAll { $0 == seat }
-            if activeSeatSequence.count == 1 {
+            // Only a COMMITTED fold (action bar) ends the hand outright. A direct-tap cycle
+            // (advancing: false) records the fold as a still-editable state — the user can cycle
+            // on past it — and the resulting fold-out is committed via the End Hand button.
+            if advancing && activeSeatSequence.count == 1 {
                 triggerFoldOut()
                 return
             }
@@ -574,7 +694,10 @@ struct HandEntryView: View {
         return ring[1..<toIdx].filter { seats.contains($0) }
     }
 
-    private func autoFoldSeats(_ seats: [Int]) {
+    /// Folds the given seats and triggers a fold-out if only one active player remains.
+    /// Returns true if the hand ended via fold-out so callers skip further street logic.
+    @discardableResult
+    private func autoFoldSeats(_ seats: [Int]) -> Bool {
         for seat in seats where !foldedSeats.contains(seat) {
             actionsThisStreet.append(Action(
                 seatIndex: seat,
@@ -587,6 +710,11 @@ struct HandEntryView: View {
         }
         syncSeatActions()
         betLevelThisStreet = actionsThisStreet.filter { $0.actionType == .open || $0.actionType == .raise }.count
+        if activeSeatSequence.count == 1 {
+            triggerFoldOut()
+            return true
+        }
+        return false
     }
 
     private func advanceHighlight() {
@@ -621,6 +749,39 @@ struct HandEntryView: View {
     }
 
     // MARK: - Helpers
+
+    /// True when the seat must make a NEW action rather than edit a live one: it is active and
+    /// either has not acted on this street, or a bet/raise was recorded after its most recent
+    /// action (it faces aggression and owes a response — e.g. an opener facing a 3-bet). Derived
+    /// purely from the append-only log, the single source of truth.
+    private func owesAction(_ seat: Int) -> Bool {
+        guard activeSeatSequence.contains(seat) else { return false }
+        guard let lastIdx = actionsThisStreet.lastIndex(where: { $0.seatIndex == seat }) else {
+            return true   // active and yet to act this street
+        }
+        return actionsThisStreet[(lastIdx + 1)...].contains {
+            $0.actionType == .open || $0.actionType == .raise
+        }
+    }
+
+    /// Removes a seat's most recent action from the current street's log, preserving any earlier
+    /// actions it took (e.g. an open-raise is kept when editing a later response). Used by the
+    /// in-place edit/clear path so append-only history — and frozen bet levels — stay intact.
+    private func removeLastAction(of seat: Int) {
+        if let idx = actionsThisStreet.lastIndex(where: { $0.seatIndex == seat }) {
+            actionsThisStreet.remove(at: idx)
+        }
+    }
+
+    /// True when `seat` is responding to a wager made by ANOTHER seat on this street, so its cycle
+    /// is call → raise → fold. False when no one else has bet — `seat` is the opener and cycles
+    /// check → bet. Ignores `seat`'s own bet on purpose: opening the betting must never flip the
+    /// seat into facing-a-bet, which would fold it on the following cycle step.
+    private func seatFacesBet(_ seat: Int) -> Bool {
+        actionsThisStreet.contains {
+            ($0.actionType == .open || $0.actionType == .raise) && $0.seatIndex != seat
+        }
+    }
 
     private func positionFor(seat: Int) -> String {
         guard let btn = buttonSeat else { return "?" }

@@ -129,7 +129,7 @@ Both halves operate independently. The user can fill in cards before recording a
 - Supports 6, 8, 9, and 10-seat configurations — configurable per session and adjustable on the seat-select screen
 - Seat buttons show action state visually:
   - Gold border + →: a bet (first wager on a post-flop street)
-  - Gold border + ↑↑ arrows: a raise. Arrow count reflects bet level (↑↑ = open-raise, ↑↑↑ = 3-bet, ↑↑↑↑ = 4-bet+)
+  - Gold border + raise arrows: a raise. Pip-layout encodes bet level: ↑↑ side-by-side = open-raise (2-bet), triangle = 3-bet, 2×2 grid = 4-bet, single arrow + badge number = 5-bet+
   - Green border + ✓: call
   - Green border + —: check
   - Red border + ✕: fold
@@ -242,14 +242,14 @@ Both halves operate independently. The user can fill in cards before recording a
 - Action Controller Bar: Fold/Call/Raise (bet context), Check/Bet (no bet), undo, forward skip
 - Direct seat tap cycling with auto-fold of skipped seats
 - Street close detection (preflop BB close, post-flop all-acted, raise-then-respond)
-- Automatic street progression: preflop → flop → turn → river
+- "Next Street →" / "End Hand →" button (top-half, above card strip divider) — active when street is closed or foldable; advances street or commits fold-out
 - Fold-out detection (last player standing wins, hand closes immediately)
 - Showdown overlay (Win / Lose / Chop) triggered on river close with 2+ players
 - Hand outcome summary state with colored status dot and descriptive text
 - `handNumber` single source of truth — advances only on "New Hand →" tap
 - Inline card picker — rank then suit, suit optional, auto-advances to next empty slot
 - Suited/offsuit shortcuts for hole cards
-- Aggression symbols: → = post-flop bet, ↑↑ = open-raise, ↑↑↑ = 3-bet, ↑↑↑↑ = 4-bet+ (raise arrows scale with bet level)
+- Aggression symbols: → = post-flop bet; raise pip-layouts: ↑↑ side-by-side (2-bet), triangle (3-bet), 2×2 grid (4-bet), ↑ + badge number (5-bet+)
 - New Session screen (Cash / Tournament)
 - Login screen (auth buttons wired to state, full auth not yet implemented)
 
