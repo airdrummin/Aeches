@@ -58,16 +58,19 @@ At the start of every hand, the user must confirm the dealer button seat.
 
 Two input methods are always available and always in sync. Power users use direct seat taps; the Action Controller guides sequential play.
 
-### 3.1 Direct Seat Tap — Tap-to-Cycle
+### 3.1 Direct Seat Tap — Routing Logic
 
-Applies to all seats, all streets. Tap a seat repeatedly to cycle through actions:
+Tap behavior depends on the tapped seat's position relative to the current action:
 
-| Tap | Action |
-|-----|--------|
-| 1st tap | Call ✓ (green checkmark) |
-| 2nd tap | Raise ↑↑ (gold up-arrows — count reflects bet level) |
-| 3rd tap | Fold ✗ (red X) |
-| 4th tap | Loops back to Call |
+| Seat State | Tap Result |
+|---|---|
+| **Current (highlighted)** | Cycles in place: Call → Raise → Fold → clear (bet context), or Check → Bet → clear (no bet). |
+| **Ahead — active, hasn't acted** | Forward jump: auto-folds unacted seats clockwise between current and tapped seat, then records tapped seat's default action (Call or Check). |
+| **Behind — already acted, street open, earliest owing** | Respond: this is the natural next responder (faces new aggression after its last action). Falls through to record its default action. |
+| **Behind — already acted, street open, any other seat** | Rewind: actions from that seat forward are removed from the log. Seats that folded in the removed span are restored to active. Tapped seat starts fresh at Call (facing a bet) or Check (no bet). |
+| **Behind — already acted, street closed, first actor of next street** | Advance: street closes, new street opens, tapped seat records its opening action. |
+| **Behind — already acted, street closed, any other seat** | Rewind back to that seat (same rewind behavior as above). |
+| **Prior-street fold (ghost)** | No-op. The seat cannot re-enter the hand. |
 
 **Swipe left on any seat** = clear that seat back to neutral (no action recorded).
 
@@ -139,9 +142,14 @@ The system closes the preflop street when the last aggressor has no unresolved a
 
 The app tracks this automatically. Tapping the raiser's seat again when action is closed = confirm street end, not a new action.
 
-### 5.5 Facing a Re-raise — Action Must Be Recorded
+### 5.5 Facing a Re-raise — Respond vs. Rewind
 
-If Seat 2 raises (↑↑), Seat 4 re-raises (↑↑↑), and the user taps Seat 2 again — Seat 2 must act before the street can close. The tap enters Seat 2 into the cycle: Call → Raise → Fold. The street does not close until Seat 2's action is recorded.
+If Seat 2 raises (↑↑), Seat 4 re-raises (↑↑↑), and the user taps Seat 2 again, one of two things happens:
+
+- **Seat 2 is the earliest-owing seat** (first seat in the action log that still faces the re-raise) → **Respond**: Seat 2 lands on Call as the default, ready to record its response. The street does not close until Seat 2 acts.
+- **Seat 2 is not the earliest-owing seat** (some other seat responded first and Seat 2 came later) → **Rewind**: the log is truncated back to Seat 2's first action, and Seat 2 starts fresh at Call.
+
+In the common case of a single raiser facing a 3-bet, the raiser is always the earliest-owing seat and always responds. Rewind applies when the user taps an already-resolved seat that has since been leapfrogged in the action sequence by someone else.
 
 ### 5.6 Action Controller — Preflop
 
@@ -211,11 +219,14 @@ Post-flop the forward arrow is removed. The controller shows only action buttons
 
 ### 6.6 Direct Seat Tap — Post-Flop
 
-Direct tap still works post-flop. Tap a seat to act on it. However:
+Direct seat tap follows the same routing logic as preflop (see Section 3.1):
 
-- First tap on a seat = first action in the current context (Check if no bet, Call if bet open)
-- Subsequent taps cycle through available options for that context
-- Swipe left = clear that seat's post-flop action
+- **Current seat** — cycles: Check → Bet → clear (no bet open), or Call → Raise → Fold → clear (bet open).
+- **Ahead** — forward jump with auto-fold of skipped seats.
+- **Behind, street open** — respond (if earliest owing) or rewind (all others).
+- **Behind, street closed** — advance street if first actor of next street, otherwise rewind.
+
+Swipe left = clear that seat's action back to neutral.
 
 ---
 

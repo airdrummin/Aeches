@@ -157,7 +157,11 @@ Post-flop with a bet/raise:
   streetClosed = every active seat (except lastRaiser) is in respondedAfter
 ```
 
-### Action cycling via direct seat tap
-When a player taps their own seat to cycle actions (call → raise → fold → clear),
-the street-close check must NOT fire mid-cycle. The player is still deciding.
-Street-close fires only when the player commits — via the action bar or by tapping the next player.
+### Direct seat tap routing
+
+Tapping a seat routes to one of four outcomes based on the seat's position in the action log:
+
+- **Current (highlighted) seat** — cycles in place. Street-close must NOT fire during a cycle; the player is still deciding. Close fires only via the action bar or when the player taps a different seat.
+- **Ahead (not yet acted)** — forward jump with auto-fold of skipped seats.
+- **Behind (already acted, street open)** — the seat whose action appears earliest in the current street's log among all seats that owe a response is the "natural next responder" and records its action. All other behind seats trigger a rewind: the log is truncated to that seat's first entry and any folds in the removed span are reversed.
+- **Behind (already acted, street closed)** — the first active seat clockwise from the button advances the street. All other behind seats rewind.

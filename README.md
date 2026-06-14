@@ -102,7 +102,11 @@ Both halves operate independently. The user can fill in cards before recording a
      - No-bet context (post-flop, no aggression yet): **Check / Bet**
      - Back arrow: undoes the last recorded action
      - Forward arrow (preflop only): folds the currently highlighted seat and advances to the next
-   - **Direct seat tap**: tapping any seat cycles its action state. Bet context: none → Call → Raise → Fold → clear. No-bet context: none → Check → Bet → clear. Tapping a seat ahead of the current highlight auto-folds any skipped seats clockwise between.
+   - **Direct seat tap**: tap routing depends on the seat's position relative to action:
+     - **Current (highlighted) seat** — cycles in place through the available actions. Bet context: Call → Raise → Fold → clear. No-bet context: Check → Bet → clear.
+     - **Ahead (hasn't acted yet)** — forward jump: auto-folds any unacted seats skipped over clockwise, then records the tapped seat's default action (Call or Check).
+     - **Behind (already acted, street open)** — if this seat is the natural next responder (earliest seat that faces new aggression), it responds with the default action. Any other behind seat **rewinds**: all actions from that seat forward are cleared, and the seat starts fresh at Call or Check.
+     - **Behind (already acted, street closed)** — if this is the first actor of the next street, tapping it advances the street and records its opening action. Any other behind seat rewinds.
    - **Card strip** (bottom half): tap any slot to open the inline card picker. Rank grid first (A K Q J T 9 8 7 6 5 4 3 2), then suit (♠ ♥ ♦ ♣ + unknown). Suit is always optional. Picker auto-advances to next empty slot after each entry.
 
 5. **Street progression** — when all active players have acted on a street, the street closes automatically. State resets for the next street (actions cleared, bet level reset, highlight moves to first active seat left of dealer). The Action Controller Bar label updates: Preflop → Flop → Turn → River.

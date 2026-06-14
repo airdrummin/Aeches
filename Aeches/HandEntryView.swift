@@ -265,7 +265,7 @@ struct HandEntryView: View {
                         nextStreetButton
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                            .padding(.top, 8)
                 }
 
                 Divider()
@@ -374,11 +374,60 @@ struct HandEntryView: View {
             phase = .recordingHand
 
         case .recordingHand:
-            // isJump: user tapped a different active seat — they're leaving the current actor.
+            // Routing for a tap on a seat OTHER than the current actor. A seat that has already
+            // acted this street can mean three different things; we disambiguate by street state
+            // and action order (all derived from the append-only log):
+            //   • ADVANCE — the street is closed and this is the next street's first actor.
+            //   • RESPOND — the street is open, this seat faces later aggression, AND it is the
+            //     earliest-acting seat that still owes a response (the natural next responder).
+            //     Falls through to the jump+record path, auto-folding unacted seats skipped over.
+            //   • REWIND  — anything else: a later owing seat (user overshot), a fully-resolved
+            //     seat, or a seat that folded this street. The round winds back to it cleanly.
+            if seat != highlightedSeat {
+                let hasActedThisStreet = actionsThisStreet.contains { $0.seatIndex == seat }
+                if hasActedThisStreet {
+                    if streetIsClosed() {
+                        if seat == firstActorAfterClose() {
+                            // ADVANCE cleanly — every active seat is already resolved, so NO
+                            // auto-fold here (folding would wrongly bust callers in a multiway pot).
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                advanceStreetOrShowdown()
+                                // One tap both advances AND records this seat's opening action on
+                                // the new street (a completed river opens the showdown instead).
+                                if phase == .recordingHand, highlightedSeat == seat {
+                                    let betCtx = currentStreet == .preflop || seatFacesBet(seat)
+                                    applyAction(betCtx ? .call : .check, advancing: false)
+                                }
+                            }
+                            return
+                        }
+                        // Closed, but not the next actor → rewind back to this seat.
+                        withAnimation(.easeInOut(duration: 0.15)) { rewindToSeat(seat) }
+                        return
+                    } else {
+                        // Street still open. Only the earliest-owing seat is the natural responder;
+                        // tapping any other already-acted seat means the user overshot → rewind.
+                        let firstOwing = actionsThisStreet.first { owesAction($0.seatIndex) }?.seatIndex
+                        guard owesAction(seat), seat == firstOwing else {
+                            withAnimation(.easeInOut(duration: 0.15)) { rewindToSeat(seat) }
+                            return
+                        }
+                        // Natural next responder → fall through to the jump+record path.
+                    }
+                } else if !activeSeatSequence.contains(seat) {
+                    // Hasn't acted this street and isn't active → prior-street fold (a ghost).
+                    // It can't re-enter the hand mid-street, so the tap is a no-op.
+                    return
+                }
+                // Otherwise (active seat that hasn't acted, or the responder above) fall through.
+            }
+
+            // isJump: user tapped a different active seat — auto-fold the seat we're leaving (if it
+            // never acted) plus any unacted seats skipped over to reach the tapped one, then record.
+            // A direct tap never closes the street itself — that is the Street button's job.
             let isJump = seat != highlightedSeat && activeSeatSequence.contains(seat)
 
             if isJump {
-                // Auto-fold the seat we're leaving (if it never acted) plus any skipped seats.
                 var toFold: [Int] = []
                 if let hs = highlightedSeat,
                    activeSeatSequence.contains(hs),
@@ -387,19 +436,6 @@ struct HandEntryView: View {
                 }
                 toFold += seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
                 autoFoldSeats(toFold)
-
-                // Evaluate the round on the PRE-tap state. If the previous actor already
-                // closed it (e.g. BB called to end preflop), this tap advances the street.
-                if streetIsClosed() {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        advanceStreetOrShowdown()
-                    }
-                    // If the same tap landed on the first actor of the new street, fall through
-                    // and record that seat's first action too — one tap both advances AND acts,
-                    // so seat-tapping alone is a complete input path. Otherwise (showdown opened,
-                    // or a different seat opens the street) consume the tap as advance-only.
-                    guard phase == .recordingHand, highlightedSeat == seat else { return }
-                }
             }
 
             // Record the tapped seat's action. A direct tap NEVER closes the street itself —
@@ -658,6 +694,45 @@ struct HandEntryView: View {
 
     // MARK: - Street Management
 
+    /// Rewinds the current street's action back to `seat`: removes that seat's first action this
+    /// street and everything recorded after it, restores any seats that folded within that removed
+    /// span back to active + neutral, recomputes the bet level, and makes `seat` the current actor
+    /// with a clean slate. Operates only on `actionsThisStreet`, so prior-street folds are never
+    /// touched. The append-only log makes "everything before stays, everything after clears" fall
+    /// straight out of a chronological truncation.
+    private func rewindToSeat(_ seat: Int) {
+        guard let firstIdx = actionsThisStreet.firstIndex(where: { $0.seatIndex == seat }) else { return }
+        let removed = actionsThisStreet[firstIdx...]
+        let restoredFolds = Set(removed.filter { $0.actionType == .fold }.map { $0.seatIndex })
+        actionsThisStreet.removeSubrange(firstIdx...)
+
+        for s in restoredFolds {
+            foldedSeats.remove(s)
+            if !activeSeatSequence.contains(s) { activeSeatSequence.append(s) }
+        }
+        activeSeatSequence.sort()
+
+        betLevelThisStreet = actionsThisStreet.filter {
+            $0.actionType == .open || $0.actionType == .raise
+        }.count
+        highlightedSeat = seat
+        syncSeatActions()
+
+        // Land the rewound seat on its default first action: Call (preflop or facing a bet),
+        // Check (post-flop with no aggression). Mirrors what a fresh seat tap does.
+        let isBetContext = currentStreet == .preflop || seatFacesBet(seat)
+        applyAction(isBetContext ? .call : .check, advancing: false)
+    }
+
+    /// First active seat clockwise from the button — the opener of the next post-flop street.
+    private func firstActorAfterClose() -> Int? {
+        let btn = buttonSeat ?? 0
+        let all = Array(0..<tableSize)
+        let btnIdx = all.firstIndex(of: btn) ?? 0
+        let rotated = Array(all[(btnIdx + 1)...]) + Array(all[...btnIdx])
+        return rotated.first { activeSeatSequence.contains($0) }
+    }
+
     private func closeStreet() {
         let completed = Street(name: currentStreet, boardCards: [], actions: actionsThisStreet)
         streets.append(completed)
@@ -666,11 +741,7 @@ struct HandEntryView: View {
         seatActions = [:]
         if let next = currentStreet.next() {
             currentStreet = next
-            let btn = buttonSeat ?? 0
-            let all = Array(0..<tableSize)
-            let btnIdx = all.firstIndex(of: btn) ?? 0
-            let rotated = Array(all[(btnIdx + 1)...]) + Array(all[...btnIdx])
-            highlightedSeat = rotated.first { activeSeatSequence.contains($0) }
+            highlightedSeat = firstActorAfterClose()
         }
         syncSeatActions()
     }
