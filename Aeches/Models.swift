@@ -104,11 +104,12 @@ struct RaiseSizing: Codable {
 // MARK: - Core Models
 
 struct Action: Identifiable, Codable {
-    var id:         UUID   = UUID()
-    var seatIndex:  Int
-    var position:   String  // frozen label e.g. "BTN", "UTG" — set at record time
-    var actionType: ActionType
-    var sizing:     RaiseSizing?  // non-nil for .open and .raise only
+    var id:           UUID   = UUID()
+    var seatIndex:    Int
+    var position:     String  // frozen label e.g. "BTN", "UTG" — set at record time
+    var actionType:   ActionType
+    var sizing:       RaiseSizing?  // non-nil for .open and .raise only
+    var isAutoFolded: Bool = false  // true when the fold was system-generated (preflop jump skip)
 }
 
 struct Street: Identifiable, Codable {

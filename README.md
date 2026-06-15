@@ -100,13 +100,16 @@ Both halves operate independently. The user can fill in cards before recording a
    - **Action Controller Bar** (bottom bar): primary action input. Context-aware buttons:
      - Bet context (preflop, or any street with an open bet): **Fold / Call / Raise**
      - No-bet context (post-flop, no aggression yet): **Check / Bet**
-     - Back arrow: undoes the last recorded action
      - Forward arrow (preflop only): folds the currently highlighted seat and advances to the next
-   - **Direct seat tap**: tap routing depends on the seat's position relative to action:
-     - **Current (highlighted) seat** — cycles in place through the available actions. Bet context: Call → Raise → Fold → clear. No-bet context: Check → Bet → clear.
-     - **Ahead (hasn't acted yet)** — forward jump: auto-folds any unacted seats skipped over clockwise, then records the tapped seat's default action (Call or Check).
-     - **Behind (already acted, street open)** — if this seat is the natural next responder (earliest seat that faces new aggression), it responds with the default action. Any other behind seat **rewinds**: all actions from that seat forward are cleared, and the seat starts fresh at Call or Check.
-     - **Behind (already acted, street closed)** — if this is the first actor of the next street, tapping it advances the street and records its opening action. Any other behind seat rewinds.
+   - **Rewind button** (gold capsule, top-left of table, always visible during recording): undoes one action at a time, crossing street boundaries when the current street log is empty. Preflop jump auto-fold batches are removed as a single Rewind press.
+   - **Next Street / End Hand button** (top-right of table): active in two cases:
+     - The current street is fully closed (all active players acted / responded to the last raise)
+     - **Preflop fast-forward**: a raise exists on the street AND 2+ players have committed AND no committed player faces unresolved aggression. Clicking the button auto-folds every remaining unacted seat (marked as system-generated so Rewind removes them cleanly) and advances to the flop. Note: in a limped pot BB must act before the button goes live — BB always has the option.
+   - **Direct seat tap** routing:
+     - **Current (highlighted) seat** — cycles in place through available actions. Bet context: Call → Raise → Fold → clear. No-bet context: Check → Bet → clear. Street-close never fires during cycling — the player is still deciding.
+     - **Unacted seat (preflop only)** — preflop jump: auto-folds the current seat (if it never acted) and every active seat skipped clockwise, then records the tapped seat's default action (Call facing a raise, Check in a limped pot).
+     - **Any active seat that owes action (postflop, or preflop seat facing a raise)** — commits the highlighted seat's pending decision (default Call or Check if not yet cycled) and moves the highlight to the next seat that owes action clockwise.
+     - **Resolved or folded seat** — no-op. Resolved means the seat has acted this street and faces no outstanding aggression.
    - **Card strip** (bottom half): tap any slot to open the inline card picker. Rank grid first (A K Q J T 9 8 7 6 5 4 3 2), then suit (♠ ♥ ♦ ♣ + unknown). Suit is always optional. Picker auto-advances to next empty slot after each entry.
 
 5. **Street progression** — when all active players have acted on a street, the street closes automatically. State resets for the next street (actions cleared, bet level reset, highlight moves to first active seat left of dealer). The Action Controller Bar label updates: Preflop → Flop → Turn → River.
@@ -243,10 +246,12 @@ Both halves operate independently. The user can fill in cards before recording a
 - Geometric table oval with gold rail, felt, gap at dealer station, 6/8/9/10-seat support
 - Session-locked hero seat, per-hand dealer button placement
 - Phase system: selectSeat → placingButton → recordingHand → showdown → handClosed
-- Action Controller Bar: Fold/Call/Raise (bet context), Check/Bet (no bet), undo, forward skip
-- Direct seat tap cycling with auto-fold of skipped seats
-- Street close detection (preflop BB close, post-flop all-acted, raise-then-respond)
-- "Next Street →" / "End Hand →" button (top-half, above card strip divider) — active when street is closed or foldable; advances street or commits fold-out
+- Action Controller Bar: Fold/Call/Raise (bet context), Check/Bet (no bet), forward skip (preflop)
+- Direct seat tap routing: cycle in place (highlighted seat), preflop jump with auto-fold (unacted seats), step-to-next-actor (postflop or owes-action seats), no-op (resolved and folded seats)
+- Rewind button (top-left of table, always visible during recording): undoes one action, crosses street boundaries, strips auto-fold batches in a single press
+- Street close detection: preflop BB-last rule (limped and raised pots), post-flop check-around, raise-then-respond
+- Preflop fast-forward: Next Street button activates when 2+ committed players, a raise exists, and no committed player faces unresolved aggression — button auto-folds remaining seats and advances to flop
+- Next Street / End Hand button (top-right of table): active on street close or preflop fast-forward; commits fold-out on pending fold
 - Fold-out detection (last player standing wins, hand closes immediately)
 - Showdown overlay (Win / Lose / Chop) triggered on river close with 2+ players
 - Hand outcome summary state with colored status dot and descriptive text

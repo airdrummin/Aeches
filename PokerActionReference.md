@@ -159,9 +159,9 @@ Post-flop with a bet/raise:
 
 ### Direct seat tap routing
 
-Tapping a seat routes to one of four outcomes based on the seat's position in the action log:
+Tapping a seat routes to one of four outcomes based on the seat's state:
 
-- **Current (highlighted) seat** — cycles in place. Street-close must NOT fire during a cycle; the player is still deciding. Close fires only via the action bar or when the player taps a different seat.
-- **Ahead (not yet acted)** — forward jump with auto-fold of skipped seats.
-- **Behind (already acted, street open)** — the seat whose action appears earliest in the current street's log among all seats that owe a response is the "natural next responder" and records its action. All other behind seats trigger a rewind: the log is truncated to that seat's first entry and any folds in the removed span are reversed.
-- **Behind (already acted, street closed)** — the first active seat clockwise from the button advances the street. All other behind seats rewind.
+- **Current (highlighted) seat** — cycles in place through available actions. Bet context: Call → Raise → Fold → clear. No-bet context: Check → Bet → clear. Street-close never fires during cycling — the player is still deciding.
+- **Unacted seat (preflop only)** — preflop jump: auto-folds the current seat (if it never acted) and all active seats skipped over clockwise, then records the tapped seat's default action (Call facing a raise, Check in a limped pot). Skipped folds are flagged `isAutoFolded` so Rewind removes the whole batch in one press.
+- **Active seat that owes action (postflop, or preflop seat facing a raise)** — commits the highlighted seat's pending decision (default Call or Check) and moves the highlight to the next seat that owes action clockwise (`nextOwingSeat`).
+- **Resolved or folded seat** — no-op. Resolved = has acted this street and faces no outstanding aggression. There is no rewind via seat tap; use the Rewind button instead.
