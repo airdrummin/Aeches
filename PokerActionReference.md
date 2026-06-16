@@ -159,9 +159,29 @@ Post-flop with a bet/raise:
 
 ### Direct seat tap routing
 
-Tapping a seat routes to one of four outcomes based on the seat's state:
+Preflop and post-flop are two distinct interaction models, dispatched on the current street.
+A tap on the **highlighted seat** cycles its action in place in both models (bet context:
+Call → Raise → Fold → clear; no-bet context: Check → Bet → clear). Street-close never fires
+during cycling — the player is still deciding. Beyond that, the two models differ:
 
-- **Current (highlighted) seat** — cycles in place through available actions. Bet context: Call → Raise → Fold → clear. No-bet context: Check → Bet → clear. Street-close never fires during cycling — the player is still deciding.
-- **Unacted seat (preflop only)** — preflop jump: auto-folds the current seat (if it never acted) and all active seats skipped over clockwise, then records the tapped seat's default action (Call facing a raise, Check in a limped pot). Skipped folds are flagged `isAutoFolded` so Rewind removes the whole batch in one press.
-- **Active seat that owes action (postflop, or preflop seat facing a raise)** — commits the highlighted seat's pending decision (default Call or Check) and moves the highlight to the next seat that owes action clockwise (`nextOwingSeat`).
-- **Resolved or folded seat** — no-op. Resolved = has acted this street and faces no outstanding aggression. There is no rewind via seat tap; use the Rewind button instead.
+**Preflop — navigation model.** A tap moves the action *to* the seat you point at; the tapped
+seat is the destination.
+- **Hero seat (not on the clock)** — no-op. You never fast-forward to your own seat; you wait
+  for the action to reach you.
+- **Resolved or folded seat** — no-op. Resolved = has acted this street and faces no outstanding
+  aggression.
+- **Any other active seat** — preflop jump: auto-folds the seat being left (if it never acted)
+  and every active seat skipped over clockwise, then records the tapped seat's default (a
+  call/limp) and leaves it on the clock. This covers both never-acted seats *and* seats that
+  acted but owe again after a raise (e.g. UTG facing a 3-bet) — both are simply "act here next."
+  Skipped folds are flagged `isAutoFolded` so Rewind removes the whole batch in one press.
+
+**Post-flop — commit model.** A tap commits whoever is on the clock and advances; the tapped
+seat is only a trigger, not a destination (there is no fold-by-skipping post-flop — a skipped
+seat checks, it does not fold).
+- **Resolved or folded seat** — no-op.
+- **Any active seat that owes action** — commits the highlighted seat's pending decision (default
+  Call or Check) and moves the highlight to the next seat that owes action clockwise
+  (`nextOwingSeat`).
+
+There is no rewind via seat tap in either model; use the Rewind button instead.
