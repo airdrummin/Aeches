@@ -1,7 +1,8 @@
-# Aeches — AI Development Reference
+# Aeches — Architecture Plan
 
-This file is the authoritative briefing for any AI assistant working on the Aeches iOS app.
-Read this before writing any code, designing any view, or making any architectural decision.
+This file captures the original architecture and product plan for the Aeches iOS app.
+For the current implemented state and behavior, `README.md` is the authoritative reference and
+`PokerActionReference.md` is the source of truth for poker action logic.
 
 ---
 
@@ -9,7 +10,7 @@ Read this before writing any code, designing any view, or making any architectur
 
 Aeches is an iOS-only app built around two tightly coupled pillars:
 
-1. **A hand history recorder** — a tap, swipe, and hold-based UI that lets poker players document hands faster than any existing solution. Zero typing required for a standard hand. Designed for one thumb, mid-session at a live table.
+1. **A hand history recorder** — a tap-based UI that lets poker players document hands faster than any existing solution. Zero typing required for a standard hand. Designed for one thumb, mid-session at a live table.
 
 2. **A pro content marketplace** — poker professionals sell access to their hand histories via monthly subscriptions or à la carte session purchases, including live tournament runs.
 
@@ -67,19 +68,27 @@ Pro-specific screens live inside the Profile tab — standard users and pros sha
 ## Core Feature: Hand Entry UI
 
 ### Table View
-- A clean geometric oval representing a 9-handed poker table
-- Numbered seat indicators as subtle gold circles on dark background
-- No felt texture, no realistic casino elements — abstract and minimal
+- A geometric oval poker table with a gold leather rail, green felt surface, and a gap at 12 o'clock for the house dealer station
+- Numbered seat buttons around the rail; supports 6, 8, 9, and 10-seat configurations (set per session, adjustable on the seat-select screen)
 - User selects their seat once per session — it stays locked
-- At start of each hand, user taps one seat to set the dealer button
-- Preflop action flows clockwise automatically from there
+- At the start of each hand, the user taps one seat to set the dealer button; the first actor highlights automatically (UTG, or BB short-handed)
+- The table stays visible at all times — the screen never navigates away during a hand
 
-### Gesture Language
-- **Tap** = Check or Call (context-dependent)
-- **Swipe right** = Bet or Raise (pushing chips forward)
-- **Swipe left** = Fold (pushing cards away)
-- **Hold + slide** = Sizing selector (common presets: 2x, 2.5x, 3x, Pot, Custom)
-- Users can navigate back to a previous street to correct a mistake — flow is not forward-only
+### Action Recording — Tap, Swipe & Hold
+All action is recorded by direct touch on the table — tap, swipe, or hold — plus the buttons. Several input paths coexist:
+- **Action Controller Bar** (bottom bar): context-aware buttons — Fold / Call / Raise in a bet context, Check / Bet with no bet, plus a preflop-only forward arrow that folds the highlighted seat and advances.
+- **Direct seat taps** (top half): preflop and post-flop are two distinct models.
+  - Tapping the **highlighted seat** cycles its action in place, looping forever (bet: Call → Raise → Fold → …; no-bet: Check → Bet → …).
+  - **Preflop (navigation model):** a tap moves the action *to* that seat, auto-folding everyone skipped clockwise and landing the tapped seat at a call/limp. The hero seat is fully participatory (the "HERO" label is cosmetic only).
+  - **Post-flop (two contexts):** with no bet live, a tap auto-*checks* everyone skipped and lands the tapped seat at Check; with a bet live, only the next seat that owes action can be tapped — it commits the seat on the clock (default Call) and lands the tapped seat at Call. A skipped seat checks, never folds.
+  - A **re-aggression guard** (both models) blocks taps on other seats while the highlighted seat owes a response to new aggression — it must act first.
+- **Direct seat swipes** (decisive shortcut): swipe a seat to record a specific action in one gesture and step to the next player, without cycling — ← Fold, ↑ Raise, → Bet, ↓ Call/Check (by context; an illegal-for-context direction is a no-op). Same routing as a tap; a swipe that closes a street stays on the seat and lights the Next Street button — it never auto-advances. Only that button advances a street (swipes and taps never do).
+- **Hold-to-size** (optional): press-and-hold a seat then slide to attach a relative size to a bet/raise (`2.5x`, `40%`, `Pot`, `All-in`) via a floating readout; shown as a pill on the seat's bottom rim. Quick swipe = unsized; hold = sized. Notation only — no chip/pot math.
+- **Rewind** (top-left): steps back one action; removes system-generated auto-action batches (preflop auto-folds, post-flop auto-checks) in a single press; crosses street boundaries.
+- **Next Street / End Hand** (top-right): advances when the street has closed, or via the preflop fast-forward path.
+- Seats render state visually — bet `→`, raise `↑↑` pips, call `✓`, check `—`, fold `✕`, gold pulsing ring = on the clock — plus prior-action badges (top edge) for earlier actions this street, and a size pill (bottom rim) when a bet/raise was sized.
+
+Action ordering, street-close detection, fold-out, and showdown all follow `PokerActionReference.md`. The full tap/swipe/hold interaction model lives in `SwipeInteractionSpec.md`. Flow is not forward-only — Rewind corrects mistakes, crossing back into earlier streets.
 
 ### Hole Card Entry
 - A single row of all 13 ranks: A K Q J T 9 8 7 6 5 4 3 2
@@ -88,12 +97,14 @@ Pro-specific screens live inside the Profile tab — standard users and pros sha
 - Accepted formats: `AK`, `AKo`, `AKs`, `AKhh`, `AhKx`
 
 ### Hand Flow (street by street)
-1. Hole cards
-2. Preflop action (per seat, clockwise from UTG)
-3. Flop (3 community cards + action)
+1. Hole cards (optional, entered any time)
+2. Preflop action — clockwise from UTG, ending on BB
+3. Flop (3 community cards + action — clockwise from the first active seat left of the button)
 4. Turn (1 card + action)
 5. River (1 card + action)
-6. Showdown / outcome (optional)
+6. Showdown (Win / Lose / Chop) when the river closes with 2+ players — or an early fold-out the moment only one player remains
+
+The table and card halves operate independently and can be filled in any order.
 
 A standard hand: under 20 seconds. A contested multi-street hand with showdown: under 45 seconds.
 

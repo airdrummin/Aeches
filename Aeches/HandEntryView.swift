@@ -262,6 +262,9 @@ struct HandEntryView: View {
                     activeSeat: highlightedSeat,
                     positions: seatPositions,
                     onSeatTap: handleSeatTap,
+                    onSeatSwipe: handleSeatSwipe,
+                    sizingStrip: sizingStrip(for:),
+                    onSeatSize: handleSeatSize,
                     instruction: tableInstruction,
                     actionText: feltActionText
                 )
@@ -408,12 +411,7 @@ struct HandEntryView: View {
         case .placingButton:
             buttonSeat = seat
             activeSeatSequence = Array(0..<tableSize)
-            let positions = calculatePositions(
-                buttonSeatIndex: seat,
-                activeSeatIndices: activeSeatSequence
-            )
-            highlightedSeat = positions.first(where: { $0.value == "UTG" })?.key
-                ?? positions.first(where: { $0.value == "BB" })?.key
+            highlightedSeat = firstActor(of: .preflop)
             phase = .recordingHand
 
         case .recordingHand:
@@ -449,12 +447,17 @@ struct HandEntryView: View {
     private func handlePreflopTap(_ seat: Int) {
         // The seat on the clock cycles its own action in place.
         if seat == highlightedSeat { cycleSeat(seat); return }
-        // Folded or empty seats are dead.
+        // Folded or empty seats are dead. (Hero is a normal active seat — no special-casing.)
         guard activeSeatSequence.contains(seat) else { return }
-        // You never fast-forward to your own seat — you wait for the action to reach you.
-        if seat == heroSeat { return }
-        // A seat that has acted and faces no new aggression is resolved.
+        // A seat that has acted and faces no new aggression is resolved — cannot be retouched.
         if hasActed(seat) && !owesAction(seat) { return }
+        // Re-aggression block: if the seat on the clock has acted but owes a response to new
+        // aggression, it must decide first — no tap can move the action forward past it.
+        if let hs = highlightedSeat, hasActed(hs) && owesAction(hs) { return }
+        // Cannot skip over a seat that has already acted this street — it must respond in sequence
+        // and cannot be auto-folded.
+        let between = seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
+        if between.contains(where: { hasActed($0) }) { return }
         // Otherwise jump the action here, folding everyone skipped clockwise. This covers both
         // never-acted seats and seats that acted but owe again after a raise (e.g. UTG facing a
         // 3-bet) — they are all just "act on this seat next".
@@ -465,15 +468,30 @@ struct HandEntryView: View {
     /// clockwise, then records the tapped seat's default (a call/limp) and leaves it on the clock.
     /// If the auto-folds leave a single player the hand ends as a fold-out.
     private func preflopJump(to seat: Int) {
-        var toFold: [Int] = []
-        if let from = highlightedSeat, activeSeatSequence.contains(from), !hasActed(from) {
-            toFold.append(from)
-        }
-        toFold += seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
-        if autoFoldSeats(toFold, autoFolded: true) { return }
-
+        if autoResolveSkipped(to: seat) { return }   // fold-out ended the hand
         highlightedSeat = seat
         recordAction(.call, for: seat)
+    }
+
+    /// Auto-resolves the seats skipped going clockwise from the highlight to `seat`: preflop they
+    /// FOLD, post-flop (no wager) they CHECK. The on-clock seat is included if it never acted. All
+    /// are flagged isAutoFolded so one Rewind press removes the batch. Returns true if a fold-out
+    /// ended the hand (caller must stop). Shared by the tap jumps and the swipe jumps.
+    @discardableResult
+    private func autoResolveSkipped(to seat: Int) -> Bool {
+        var skipped: [Int] = []
+        if let from = highlightedSeat, activeSeatSequence.contains(from), !hasActed(from) {
+            skipped.append(from)
+        }
+        skipped += seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
+            .filter { !hasActed($0) }
+
+        if currentStreet == .preflop {
+            return autoFoldSeats(skipped, autoFolded: true)    // may trigger a fold-out
+        } else {
+            for s in skipped { recordAction(.check, for: s, autoFolded: true) }
+            return false                                       // checks never reduce the active count
+        }
     }
 
     // MARK: - Seat Tap Routing — Post-flop (commit model)
@@ -488,19 +506,46 @@ struct HandEntryView: View {
         guard activeSeatSequence.contains(seat) else { return }
         // A seat that has acted and faces no new aggression is resolved.
         if hasActed(seat) && !owesAction(seat) { return }
-        // Otherwise commit the seat on the clock and step to the next that owes action.
-        withAnimation(.easeInOut(duration: 0.15)) { stepToNextActor() }
+        // Re-aggression block: the seat on the clock must respond to new aggression before the
+        // action can move forward.
+        if let hs = highlightedSeat, hasActed(hs) && owesAction(hs) { return }
+
+        if openBetExists {
+            // Bet context: strict order only. Only the exact next seat that owes action can be
+            // tapped — no auto-actions, no fold-by-skipping.
+            guard seat == nextOwingSeat(after: highlightedSeat ?? seat) else { return }
+            withAnimation(.easeInOut(duration: 0.15)) { stepToNextPostflopActor(to: seat) }
+        } else {
+            // No-bet context: auto-check jump, mirroring preflop auto-fold. Cannot skip a seat that
+            // has already checked.
+            let between = seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
+            if between.contains(where: { hasActed($0) }) { return }
+            withAnimation(.easeInOut(duration: 0.15)) { postflopJump(to: seat) }
+        }
     }
 
-    /// Commits the highlighted seat's pending decision (its default if it never cycled one) and
-    /// moves the highlight to the next seat that owes action clockwise. If none remains the
-    /// highlight stays put — the user advances with the Next Street button.
-    private func stepToNextActor() {
+    /// Post-flop no-bet equivalent of `preflopJump`. Auto-checks the seat on the clock (if it
+    /// never acted) and every unacted seat strictly between, then lands the destination at Check.
+    /// Auto-checks reuse the `isAutoFolded` batch flag so a single Rewind press removes them. No
+    /// fold-out guard is needed — checks never reduce the active-seat count.
+    private func postflopJump(to seat: Int) {
+        _ = autoResolveSkipped(to: seat)
+        // Land on the destination at Check immediately. Not auto-flagged, so Rewind pops this
+        // Check first, then strips the auto-check batch behind it in the same press.
+        highlightedSeat = seat
+        recordAction(.check, for: seat)
+    }
+
+    /// Post-flop bet context: commits the seat on the clock (its default if it never cycled one),
+    /// then lands the destination at Call immediately. The caller guarantees `seat` is the next
+    /// seat that owes action, so this both records the response and advances in one tap.
+    private func stepToNextPostflopActor(to seat: Int) {
         guard let current = highlightedSeat else { return }
         if owesAction(current) {
             recordAction(seatFacesBet(current) ? .call : .check, for: current)
         }
-        highlightedSeat = nextOwingSeat(after: current) ?? current
+        highlightedSeat = seat
+        recordAction(.call, for: seat)
     }
 
     /// The next active seat clockwise from `seat` that still owes an action. Returns nil when every
@@ -509,6 +554,141 @@ struct HandEntryView: View {
         let ring = clockwiseOrder(from: seat, seats: Array(0..<tableSize))
         return ring.dropFirst().first { owesAction($0) }
     }
+
+    // MARK: - Seat Swipe Routing (decisive: record a specific action + advance)
+
+    /// Maps a swipe direction to the action it records for `seat`, or nil when the direction is
+    /// illegal in the current context (strict — caller treats nil as a no-op).
+    private func swipeAction(_ dir: SwipeDirection, for seat: Int) -> ActionType? {
+        let betContext = currentStreet == .preflop || seatFacesBet(seat)
+        switch dir {
+        case .left:  return .fold
+        case .down:  return betContext ? .call : .check
+        case .up:    return betContext ? .raise : nil    // raise only when a wager exists
+        case .right: return betContext ? nil   : .open    // bet only when no wager exists
+        }
+    }
+
+    /// A directional swipe on a seat — decisive: record the resolved action and advance.
+    private func handleSeatSwipe(_ seat: Int, _ dir: SwipeDirection) {
+        guard phase == .recordingHand else { return }
+        guard let action = swipeAction(dir, for: seat) else { return }   // illegal direction → no-op
+        routeDecisive(action, to: seat, sizing: nil)
+    }
+
+    /// Shared decisive routing for swipes and sized holds — mirrors the tap routing but always
+    /// lands a specific action and advances. `sizing` (Phase 2) is attached to the landed action.
+    private func routeDecisive(_ action: ActionType, to seat: Int, sizing: RaiseSizing?) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            // On-clock seat → record + move to the next player. Routed through finishSwipe (not
+            // commitAction) so a swipe never auto-advances the street — only the Next Street button does.
+            if seat == highlightedSeat {
+                // A decisive gesture SETS this seat's current decision. If the seat already has a
+                // standing turn-action (e.g. it was cycled to Call), supersede it rather than stack a
+                // second action. owesAction == true means it owes a fresh response (never acted, or
+                // facing new aggression) — that's a genuinely separate action, so don't remove it.
+                if hasActed(seat) && !owesAction(seat) { removeLastAction(of: seat) }
+                finishSwipe(on: seat, action: action, sizing: sizing)
+                return
+            }
+            // Dead seats (folded / not in hand).
+            guard activeSeatSequence.contains(seat) else { return }
+            // Resolved: acted and owes nothing.
+            if hasActed(seat) && !owesAction(seat) { return }
+            // Re-aggression: the on-clock seat must respond before any other seat is actionable.
+            if let hs = highlightedSeat, hasActed(hs) && owesAction(hs) { return }
+
+            if currentStreet != .preflop && openBetExists {
+                // Bet context: strict — only the exact next owing seat, no skip-jumping into a bet.
+                guard seat == nextOwingSeat(after: highlightedSeat ?? seat) else { return }
+                commitSwipeStrict(to: seat, action: action, sizing: sizing)
+            } else {
+                // Navigation context: cannot skip an already-acted seat.
+                let between = seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
+                if between.contains(where: { hasActed($0) }) { return }
+                commitSwipeJump(to: seat, action: action, sizing: sizing)
+            }
+        }
+    }
+
+    /// Navigation-context swipe: auto-resolve skipped seats, then land `action` on the destination.
+    private func commitSwipeJump(to seat: Int, action: ActionType, sizing: RaiseSizing? = nil) {
+        if autoResolveSkipped(to: seat) { return }   // fold-out already ended the hand
+        finishSwipe(on: seat, action: action, sizing: sizing)
+    }
+
+    /// Strict bet-context swipe (the seat IS the next owing seat): commit the on-clock seat's
+    /// default response first, then land `action` on the destination.
+    private func commitSwipeStrict(to seat: Int, action: ActionType, sizing: RaiseSizing? = nil) {
+        if let cur = highlightedSeat, owesAction(cur) {
+            recordAction(seatFacesBet(cur) ? .call : .check, for: cur)
+        }
+        finishSwipe(on: seat, action: action, sizing: sizing)
+    }
+
+    /// Shared tail: record the action on `seat`, handle fold-out, then move to the next player —
+    /// UNLESS this action closes the street, in which case the highlight stays on the seat that just
+    /// acted (advancing onto an already-acted player would be confusing) and the Flop / Turn / River
+    /// button lights up. Swipes never auto-advance the street; only that button does.
+    private func finishSwipe(on seat: Int, action: ActionType, sizing: RaiseSizing? = nil) {
+        recordAction(action, for: seat, sizing: sizing)
+        if action == .fold && activeSeatSequence.count == 1 { triggerFoldOut(); return }
+        highlightedSeat = seat
+        // Street complete → stay on the acting seat (the Next Street button lights). Otherwise move to
+        // the next seat that owes action and SEED its default (call facing a bet, else check) — the
+        // same thing the tap flow does on arrival. This keeps the next seat "live" (its prior action
+        // shows as a pill, not as the current action) and gives Rewind an entry to peel, so it steps
+        // back through this seat instead of skipping past it.
+        guard !streetIsClosed() else { return }
+        if let next = nextOwingSeat(after: seat) {
+            highlightedSeat = next
+            recordAction(seatFacesBet(next) ? .call : .check, for: next)
+        }
+    }
+
+    // MARK: - Seat Sizing (hold-to-size, Phase 2)
+
+    /// The ordered sizing strip for `seat` (floor → All-in), or [] when sizing isn't applicable.
+    /// Multiple strip for any raise/open (preflop is always a bet context); percent strip for a
+    /// post-flop opening bet.
+    private func sizingStrip(for seat: Int) -> [String] {
+        guard phase == .recordingHand, activeSeatSequence.contains(seat) else { return [] }
+        let betContext = currentStreet == .preflop || seatFacesBet(seat)
+        return betContext ? Self.multipleStrip : Self.betStrip
+    }
+
+    /// A completed hold-to-size on `seat`: records the aggressive action (bet/raise by context)
+    /// with the chosen size, routed exactly like a swipe.
+    private func handleSeatSize(_ seat: Int, _ label: String) {
+        guard phase == .recordingHand, activeSeatSequence.contains(seat) else { return }
+        let betContext = currentStreet == .preflop || seatFacesBet(seat)
+        let action: ActionType = betContext ? .raise : .open
+        routeDecisive(action, to: seat, sizing: makeSizing(label))
+    }
+
+    /// Builds a RaiseSizing from a strip label — notation only, no chip math.
+    private func makeSizing(_ label: String) -> RaiseSizing {
+        if label == "All-in" { return RaiseSizing(type: .multiple, value: nil, label: label) }
+        if label == "Pot"    { return RaiseSizing(type: .potFraction, value: 1.0, label: label) }
+        if label.hasSuffix("x") {
+            return RaiseSizing(type: .multiple, value: Double(label.dropLast()), label: label)
+        }
+        if label.hasSuffix("%") {
+            return RaiseSizing(type: .potFraction, value: Double(label.dropLast()).map { $0 / 100 }, label: label)
+        }
+        return RaiseSizing(type: .multiple, value: nil, label: label)
+    }
+
+    /// 2.0x … 5.0x (0.1x steps) then All-in — preflop opens, re-raises, post-flop raises.
+    private static let multipleStrip: [String] =
+        (20...50).map { String(format: "%.1fx", Double($0) / 10) } + ["All-in"]
+
+    /// 5% … 95% (5% steps), Pot, then 1.1x … 5.0x (0.1x steps) ×pot, then All-in — post-flop bet.
+    private static let betStrip: [String] =
+        stride(from: 5, through: 95, by: 5).map { "\($0)%" }
+        + ["Pot"]
+        + (11...50).map { String(format: "%.1fx", Double($0) / 10) }
+        + ["All-in"]
 
     // MARK: - Action Cycling (shared by both streets)
 
@@ -542,13 +722,13 @@ struct HandEntryView: View {
             switch current {
             case .call:         return .raise
             case .raise, .open: return .fold
-            case .fold:         return nil
+            case .fold:         return .call   // wraps back to start — cycle loops forever
             default:            return .call
             }
         } else {
             switch current {
             case .check: return .open
-            case .open:  return nil
+            case .open:  return .check          // wraps back to start — cycle loops forever
             default:     return .check
             }
         }
@@ -559,12 +739,12 @@ struct HandEntryView: View {
     /// The single low-level mutation: append one action to the current street's log, then rebuild
     /// every piece of derived state from it. All recording paths funnel through here, so the log
     /// stays the one source of truth. Does not move the highlight or close the street.
-    private func recordAction(_ type: ActionType, for seat: Int, autoFolded: Bool = false) {
+    private func recordAction(_ type: ActionType, for seat: Int, autoFolded: Bool = false, sizing: RaiseSizing? = nil) {
         actionsThisStreet.append(Action(
             seatIndex: seat,
             position: positionFor(seat: seat),
             actionType: type,
-            sizing: nil,
+            sizing: sizing,
             isAutoFolded: autoFolded
         ))
         recomputeDerivedState()
@@ -615,6 +795,9 @@ struct HandEntryView: View {
             result[seat] = SeatState(action: .foldedOut)
         }
 
+        // Build each seat's action history this street in log order, capturing the bet level frozen
+        // at each entry so prior aggression keeps its pip layout.
+        var histories: [Int: [(action: SeatState.Action, betLevel: Int)]] = [:]
         for action in actionsThisStreet {
             let seatAction: SeatState.Action
             switch action.actionType {
@@ -628,7 +811,21 @@ struct HandEntryView: View {
                 .prefix(while: { $0.id != action.id })
                 .filter { $0.actionType == .open || $0.actionType == .raise }
                 .count + (action.actionType == .open || action.actionType == .raise ? 1 : 0)
-            result[action.seatIndex] = SeatState(action: seatAction, betLevel: levelAtThisPoint)
+            histories[action.seatIndex, default: []].append((seatAction, levelAtThisPoint))
+        }
+
+        // The most recent entry is the seat's current state; everything before it is shown as
+        // prior-action badges (oldest first).
+        for (seat, history) in histories {
+            let current = history.last!
+            let prior = history.dropLast().map { $0.action }
+            let sizeLabel = actionsThisStreet.last { $0.seatIndex == seat }?.sizing?.label
+            result[seat] = SeatState(
+                action: current.action,
+                betLevel: current.betLevel,
+                priorActions: Array(prior),
+                sizeLabel: sizeLabel
+            )
         }
         seatActions = result
     }
@@ -636,27 +833,36 @@ struct HandEntryView: View {
     // MARK: - Undo
 
     /// Undoes the most recent action, peeling back across street boundaries when the current
-    /// street has no actions yet. The highlight lands on the seat of the new most-recent action so
-    /// it can be re-cycled (or stays on the seat just undone when nothing remains). Card slots are
-    /// left untouched — rewind only affects recorded action.
+    /// street has no actions yet. The highlight lands on the new most-recent actor so it can be
+    /// re-cycled, or on the street's opener (first to act) when nothing remains — so undoing a
+    /// jump returns to "first to act", not the seat that was tapped. Card slots are left
+    /// untouched — rewind only affects recorded action.
     private func undoLastAction() {
+        // Nothing on this street yet — step back into the previous street and land the highlight on
+        // its last actor (kept, re-armed for cycling). The action itself stays; a further press
+        // then undoes within that street. This is what makes Rewind cross a boundary cleanly:
+        // empty flop + BB highlighted → reopen preflop with BB (its last actor) still highlighted.
         if actionsThisStreet.isEmpty {
-            // Nothing on this street — reopen the previous one and undo within it.
             guard let prev = streets.popLast() else { return }
             currentStreet = prev.name
             actionsThisStreet = prev.actions
+            recomputeDerivedState()
+            highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
+            return
         }
-        guard let removed = actionsThisStreet.popLast() else { return }
 
-        // Strip any auto-folds that were generated alongside the removed action (preflop jump
-        // skips). They're system-generated, not player decisions, so one Rewind press removes
-        // the whole batch.
+        // Remove the most recent action, then strip any trailing system-generated auto-action batch
+        // (preflop auto-folds via preflopJump, post-flop auto-checks via postflopJump). They're not
+        // player decisions, so one Rewind press removes the whole jump.
+        actionsThisStreet.removeLast()
         while actionsThisStreet.last?.isAutoFolded == true {
             actionsThisStreet.removeLast()
         }
 
         recomputeDerivedState()
-        highlightedSeat = actionsThisStreet.last?.seatIndex ?? removed.seatIndex
+        // Land on the new most-recent actor, or — when the street is now empty (a jump was undone) —
+        // on the street's opener, so a jump rewinds back to "first to act" rather than the seat tapped.
+        highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
     }
 
     /// Rebuilds derived state (folds, active seats, bet level, seat visuals) from the append-only
@@ -752,6 +958,17 @@ struct HandEntryView: View {
         let btnIdx = all.firstIndex(of: btn) ?? 0
         let rotated = Array(all[(btnIdx + 1)...]) + Array(all[...btnIdx])
         return rotated.first { activeSeatSequence.contains($0) }
+    }
+
+    /// The opener of a street: UTG (or BB short-handed) preflop, else the first active seat left of
+    /// the button. Single source of truth for "who is first to act" — used at button placement and
+    /// as the highlight fallback when Rewind empties a street.
+    private func firstActor(of street: StreetName) -> Int? {
+        guard street == .preflop else { return firstActorAfterClose() }
+        guard let btn = buttonSeat else { return nil }
+        let positions = calculatePositions(buttonSeatIndex: btn, activeSeatIndices: activeSeatSequence)
+        return positions.first { $0.value == "UTG" }?.key
+            ?? positions.first { $0.value == "BB" }?.key
     }
 
     private func closeStreet() {
