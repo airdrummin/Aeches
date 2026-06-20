@@ -820,13 +820,19 @@ struct HandEntryView: View {
             return
         }
 
-        // Re-home an "ahead" ring first. After an advance-no-seed (action button or swipe) the
-        // highlight sits on an empty seat one step ahead of the log's last entry. The first Rewind
-        // returns the ring to the last actor (showing their action) WITHOUT deleting — visually
-        // identical to undoing a tap, whose landing seat carried an action. A further press then
-        // undoes that action. Recording is two kinds of step (a bare advance, and an action); Rewind
-        // peels the advance before the action.
-        if let hs = highlightedSeat, !hasActed(hs),
+        // Re-home an "ahead" ring first. After an advance-no-seed (action button or swipe) the cue
+        // sits one step ahead of the log's last entry, on a seat that owes a fresh action but hasn't
+        // recorded it yet. The first Rewind returns the ring to the last actor (showing their action)
+        // WITHOUT deleting — visually identical to undoing a tap, whose landing seat carried an
+        // action. A further press then undoes that action. Recording is two kinds of step (a bare
+        // advance, and an action); Rewind peels the advance before the action.
+        //
+        // The test is `owesAction(hs)`, NOT `!hasActed(hs)`: the cue is also "ahead of the log" when
+        // it advanced onto a seat that acted earlier this street but now owes a response to new
+        // aggression (e.g. an opener facing a 3-bet, or a checker facing a bet). `!hasActed` missed
+        // that case and deleted the last action instead of re-homing. `owesAction` is the same
+        // predicate the tap/swipe routing uses for "on the clock, awaiting a fresh action".
+        if let hs = highlightedSeat, owesAction(hs),
            let lastActor = actionsThisStreet.last?.seatIndex, lastActor != hs {
             highlightedSeat = lastActor
             return
