@@ -163,7 +163,7 @@ Preflop and post-flop are two distinct interaction models, dispatched on the cur
 A tap on the **highlighted seat** cycles its action in place in both models, looping forever with
 no blank state (bet context: Call → Raise → Fold → Call → …; no-bet context: Check → Bet →
 Check → …). Street-close never fires during cycling — the player is still deciding. The only way
-to undo an action is the Rewind button.
+to undo an action is the Undo button.
 
 **Re-aggression guard (both models).** If the highlighted seat has already acted but now owes a
 response to new aggression (`hasActed && owesAction`), every tap on a non-highlighted seat is a
@@ -180,14 +180,14 @@ seat is the destination.
   and every active seat skipped over clockwise, then records the tapped seat's default (a
   call/limp) and leaves it on the clock. This covers both never-acted seats *and* seats that
   acted but owe again after a raise (e.g. UTG facing a 3-bet) — both are simply "act here next."
-  Skipped folds are flagged `isAutoFolded` so Rewind removes the whole batch in one press.
+  Skipped folds are flagged `isAutoFolded` so Undo removes the whole batch in one press.
 
 **Post-flop — two contexts, dispatched on whether a bet exists this street.** A skipped seat
 checks, it never folds (there is no fold-by-skipping post-flop). Tapping a resolved or folded
 seat is a no-op in both contexts.
 - **No bet yet** — post-flop jump, mirroring the preflop jump: auto-*checks* the seat on the
   clock (if unacted) and every unacted seat skipped over clockwise, then lands the tapped seat at
-  Check. Auto-checks reuse the `isAutoFolded` batch flag so Rewind removes them in one press. Tap
+  Check. Auto-checks reuse the `isAutoFolded` batch flag so Undo removes them in one press. Tap
   the landed seat again to cycle Check → Bet.
 - **A bet exists** — strict order only: only the exact next seat that owes action
   (`nextOwingSeat`) can be tapped. It commits the seat on the clock (default Call) and lands the
@@ -197,7 +197,7 @@ Note on the post-flop bet symbol: the first wager on a post-flop street is a **b
 shown as `→`); only a wager that re-raises an existing bet is a **raise** (`.raise`, shown as
 `↑↑` / pip layout). They are distinct actions.
 
-There is no rewind via seat tap in either model; use the Rewind button instead.
+There is no undo via seat tap in either model; use the Undo button instead.
 
 **Swipes** are a decisive shortcut layered over this same model: a directional swipe records a chosen
 action (← Fold, ↑ Raise, → Bet, ↓ Call/Check) in one gesture — picking the action directly instead
@@ -218,13 +218,14 @@ a street is the **Next Street button**; no action button, tap, or swipe ever doe
 button pulses instead** — the cue to advance. (A round completed by tapping leaves the seat pulsing
 and the button lit-but-calm, since taps are tentative.)
 
-**Rewind.** One undo. Recording is two kinds of step — a *cue-advance* (the ring/pulse moves, no log
-entry) and an *action* (a log entry); Rewind reverses a cue-advance before it deletes anything. The
+**Undo** (the step-back control; labeled "Undo", `↺`). Recording is two kinds of step — a *cue-advance*
+(the ring/pulse moves, no log entry) and an *action* (a log entry); Undo reverses a cue-advance before it
+deletes anything. The
 cue sits "ahead of the log" in two equivalent forms: on an *empty waiting seat* (after an
 advance-no-seed) or on the *Next Street button* (after a decisive close). In either case the first
-Rewind returns the cue to the last actor (showing their action) **without deleting**; a further press
+Undo returns the cue to the last actor (showing their action) **without deleting**; a further press
 then undoes that action. Beyond that it peels the last action, crossing street boundaries and
-stripping system-generated auto-action batches in a single press. Rewind is **reversible at hand
+stripping system-generated auto-action batches in a single press. Undo is **reversible at hand
 close**: after a fold-out it re-opens recording and peels the fold; after a resolved showdown it
 re-opens the Win/Lose/Chop overlay to re-pick.
 

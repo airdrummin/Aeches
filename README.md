@@ -96,21 +96,21 @@ Both halves operate independently. The user can fill in cards before recording a
 
 3. **Place dealer button** — tap any seat to set the dealer for this hand. The first highlight (UTG, or BB in short-handed games) appears automatically. Phase transitions to Recording.
 
-4. **Recording** — both halves are active simultaneously. All recording controls live in a **single Control Bar** pinned to the bottom (thumb zone), which morphs by phase. During recording it shows three zones: **Rewind** (left) · **action buttons** (middle) · **Next Street / End Hand** (right). Several input paths coexist:
-   - **Action buttons** (middle of the Control Bar): act on the highlighted seat, then advance the ring to the next player. Context-aware:
+4. **Recording** — both halves are active simultaneously. All recording controls live in a **Control Bar** pinned to the bottom (thumb zone), laid out in **two rows**: a slim **utility row** — **Undo** (left) · **Next Street / End Hand** (right) — above a **full-width primary row** of **action buttons**. When the hand closes the bar goes quiet (Undo only). Several input paths coexist:
+   - **Action buttons** (the full-width primary row): act on the highlighted seat, then advance the ring to the next player. Context-aware:
      - Bet context (preflop, or any street with an open bet): **Fold / Call / Raise**
      - No-bet context (post-flop, no aggression yet): **Check / Bet**
      - An action button that *closes* the street holds on the acting seat and lights the Next Street button — it never advances the street itself (see §5).
-   - **Rewind button** (gold capsule, left of the Control Bar): steps back one action at a time. System-generated auto-action batches (preflop auto-folds, post-flop auto-checks) are removed in a single press, and when a jump empties the street the highlight returns to that street's first-to-act seat (not the seat that was tapped). When the current street has no actions left, the next press reopens the previous street with its last actor highlighted and its actions intact — a further press then undoes within that street. The cue can sit "ahead of the log" in two equivalent forms — on an *empty waiting seat* (after a button/swipe advance) or on the *Next Street button* (after a decisive street close, see below) — and in either case the first Rewind returns the cue to the last actor (showing their action) without deleting; a further press then undoes that action. **Rewind is reversible at hand close**: after a fold-out it re-opens recording and peels the offending fold; after a resolved showdown it re-opens the Win / Lose / Chop overlay to re-pick.
-   - **Next Street / End Hand button** (right of the Control Bar): active in two cases:
+   - **Undo button** (`↺` gold capsule, left of the utility row): steps back one action at a time. System-generated auto-action batches (preflop auto-folds, post-flop auto-checks) are removed in a single press, and when a jump empties the street the highlight returns to that street's first-to-act seat (not the seat that was tapped). When the current street has no actions left, the next press reopens the previous street with its last actor highlighted and its actions intact — a further press then undoes within that street. The cue can sit "ahead of the log" in two equivalent forms — on an *empty waiting seat* (after a button/swipe advance) or on the *Next Street button* (after a decisive street close, see below) — and in either case the first Undo returns the cue to the last actor (showing their action) without deleting; a further press then undoes that action. **Undo is reversible at hand close**: after a fold-out it re-opens recording and peels the offending fold; after a resolved showdown it re-opens the Win / Lose / Chop overlay to re-pick.
+   - **Next Street / End Hand button** (right of the utility row): active in two cases:
      - The current street is fully closed (all active players acted / responded to the last raise)
-     - **Preflop fast-forward**: a raise exists on the street AND 2+ players have committed AND no committed player faces unresolved aggression. Clicking the button auto-folds every remaining unacted seat (marked as system-generated so Rewind removes them cleanly) and advances to the flop. Note: in a limped pot BB must act before the button goes live — BB always has the option.
-   - **Direct seat tap** routing — preflop and post-flop are two separate models (dispatched on the current street). Tapping the **highlighted seat** cycles its action in place in both, looping forever with no blank state (bet context: Call → Raise → Fold → Call → …; no-bet: Check → Bet → Check → …); street-close never fires during cycling, and the only way to undo is the Rewind button. A **re-aggression guard** applies to both models: if the highlighted seat has already acted but now owes a response to new aggression, every tap on another seat is a no-op until that seat cycles its response. Beyond that:
+     - **Preflop fast-forward**: a raise exists on the street AND 2+ players have committed AND no committed player faces unresolved aggression. Clicking the button auto-folds every remaining unacted seat (marked as system-generated so Undo removes them cleanly) and advances to the flop. Note: in a limped pot BB must act before the button goes live — BB always has the option.
+   - **Direct seat tap** routing — preflop and post-flop are two separate models (dispatched on the current street). Tapping the **highlighted seat** cycles its action in place in both, looping forever with no blank state (bet context: Call → Raise → Fold → Call → …; no-bet: Check → Bet → Check → …); street-close never fires during cycling, and the only way to undo is the Undo button. A **re-aggression guard** applies to both models: if the highlighted seat has already acted but now owes a response to new aggression, every tap on another seat is a no-op until that seat cycles its response. Beyond that:
      - **Preflop (navigation model)** — a tap moves the action *to* the tapped seat. The **hero seat is fully participatory** — functionally identical to any other active seat (the "HERO" label is cosmetic only). Tapping a **resolved or folded seat** is a no-op, and you cannot jump *past* a seat that has already acted this street (it must respond in sequence). Tapping **any other active seat** does a preflop jump: auto-folds the seat being left (if it never acted) and every active seat skipped clockwise, then records the tapped seat's default (a call/limp) and leaves it on the clock — this covers both never-acted seats and seats that owe again after a raise (e.g. UTG facing a 3-bet).
      - **Post-flop (two contexts, dispatched on whether a bet exists)** — a skipped seat checks, never folds (no fold-by-skipping post-flop). Tapping a **resolved or folded seat** is a no-op in both. **No bet yet:** a tap does a post-flop jump mirroring the preflop jump — auto-*checks* the seat on the clock (if unacted) and every unacted seat skipped clockwise, then lands the tapped seat at Check (tap again to cycle Check → Bet). **A bet exists:** strict order only — only the exact next seat that owes action can be tapped; it commits the seat on the clock (default Call) and lands the tapped seat at Call.
    - **Direct seat swipe** (decisive shortcut) — swipe a seat to record a specific action in one gesture, without cycling: **← Fold, ↑ Raise, → Bet, ↓ Call/Check** (resolved by context; a direction that's illegal in the current context is a no-op). A swipe follows the same routing as a tap but lands the swiped action directly instead of cycling to it, then **advances the ring to the next player without seeding any action on it** — behaviorally identical to an action-button press. (Seeding the next seat is exactly what it must *not* do: that would commit a decision the user never made. The next seat enters empty/waiting; tapping past it later auto-folds/-checks it correctly.) A swipe that *closes* a street holds on that seat and lights the Next Street button — it never advances the street. (Implemented in `HandEntryView.swift` routing + `SeatSelectionView.swift` gestures.)
    - **Hold-to-size** (optional) — press and hold a seat, then slide, to attach a size to a bet/raise (`2.5x`, `40%`, `Pot`, `All-in`); a floating readout follows the thumb, snapping to the strip. Quick swipe = unsized; hold = sized. Sizes are relative notation only — no chip/pot math. Shown as a pill on the seat's bottom rim.
-   - **Card strip** (bottom half): tap any slot to open the inline card picker. Rank grid first (A K Q J T 9 8 7 6 5 4 3 2), then suit (♠ ♥ ♦ ♣ + unknown). Suit is always optional. Picker auto-advances to next empty slot after each entry.
+   - **Card strip** (bottom half): tap any slot to open the **per-street card picker**, which **docks in the gap below the strip** — the strip slots stay visible and act as the frames, so nothing is covered or duplicated. It enters a whole street at once (**2 hole, 3 flop, 1 turn, 1 river**) with the rank grid and suit buttons on **one screen** (no rank→suit step). Tap a rank to fill the focused frame, tap a suit (♠ ♥ ♦ ♣ or `?` for unknown). Hole cards add a **Suited / Offsuit** shortcut; flop adds **Rainbow / Mono**. Suit is always optional. See `ShorthandReference.md` §2 for the notation.
 
 5. **Street progression** — a street is closed once all active players have acted / responded to the last raise. **Only the Next Street button advances the street** — no input (action button, tap, or swipe) ever advances it. A closing action holds the ring on the acting seat and lights the Next Street button; the user taps it to advance. On advance, state resets for the next street (actions cleared, bet level reset, highlight moves to first active seat left of dealer). The Next Street button label updates: Flop → Turn → River → Showdown.
 
@@ -123,7 +123,7 @@ Both halves operate independently. The user can fill in cards before recording a
    - Red dot + "You lose"
    - Gold dot + "Chop"
    - Muted dot + "Seat X wins" (fold-out where hero already folded)
-   The Control Bar goes quiet (Rewind only), and the felt prompts **"TAP A SEAT TO DEAL"**. Rewind remains live to reverse the close (re-open the showdown overlay, or peel a mis-folded fold-out).
+   The Control Bar goes quiet (Undo only), and the felt prompts **"TAP A SEAT TO DEAL"**. Undo remains live to reverse the close (re-open the showdown overlay, or peel a mis-folded fold-out).
 
 8. **Deal the next hand** — there is no New Hand button. From the closed state, **tap any seat to place the dealer button there and deal the next hand** — the same gesture used to place the button on hand #1. Hand number increments, state resets, recording starts immediately (no separate placing-button step). Hero seat stays locked for the session.
 
@@ -143,17 +143,28 @@ Both halves operate independently. The user can fill in cards before recording a
   - Gold pulsing ring: currently highlighted seat (action on them). Exactly one seat pulses at a time; on a decisive street close the ring clears and the Next Street button pulses instead
   - Green fill + HERO label: hero seat
   - Prior-action badges: small colored pills around the seat's upper edge showing that seat's earlier actions *this street*, distinct from its current center action (e.g. a player who raised then called a 3-bet shows a gold ↑↑ pill beside a green ✓ center). Up to 3 slots (upper-left, top, upper-right); 4+ collapses the oldest into a gray "+N". Symbols match the center: → bet, ↑↑ raise, ✓ call, — check, ✕ fold
+  - Empty center while owing a fresh response: when the cue arrives on a seat that **acted earlier this street but now owes a response to new aggression** (an opener facing a 3-bet, a checker facing a bet), its center goes **empty** — it reads like any seat yet to act — and its earlier action(s) move to prior-action pills immediately. Once it acts, the new decision fills the center and the earlier action stays as a pill. Only the seat *currently on the clock* does this; other seats that also owe keep their last action shown until the cue reaches them in turn
   - Size pill: when a bet/raise was sized via hold-to-size, a small pill on the seat's *bottom* rim shows the notation (`2.5x`, `40%`, `Pot`, `All-in`). Clear of the top-edge prior-action badges; absent when no size was attached
 
 ### Card Entry
 
-- Tap any card slot → rank grid appears (A K Q J T 9 8 7 6 5 4 3 2)
-- Tap a rank → suit options appear (♠ ♥ ♦ ♣ + unknown ?)
-- Suit is always optional — tap "?" to record rank only
-- For hole cards, `s` (suited) and `o` (offsuit) shortcuts available after selecting the first rank
-- Accepted notation formats: `AK`, `AKo`, `AKs`, `AhKs`, `AxKs`
-- After entering a card, picker auto-advances to the next empty slot
-- Tap "Clear" to remove a card, "Done" to dismiss picker
+Card entry is **per-street group entry**, not slot-by-slot. Tapping any slot opens that street's picker, which **docks in the gap below the strip** (the strip slots are the frames and stay visible — see Recording above).
+
+- **One sheet per street:** hole = 2 frames, flop = 3, turn = 1, river = 1. The picker only ever shows the tapped street's frames.
+- **Rank + suit on one screen** (no rank→suit swap): tap a rank to fill the **focused** frame (it auto-advances to the next empty frame, then back to the first for suiting); tap a suit (♠ ♥ ♦ ♣) or `?` for unknown; tap a frame to re-focus it.
+- **Hole** adds **Suited / Offsuit** (sets both cards' relationship); **flop** adds **Rainbow / Mono** (sets the texture). Suit is always optional.
+- **Live notation readout** shows the shorthand form as you go (`AJs`, `AsJx`, `Q53r`, `Jh`, `5x`).
+- The 7–2 rank row is centered to nest into the gaps of the A–8 row above.
+- Accepted notation: `AK`, `AKo`, `AKs`, `AhKs`, `AsKx`; flop `Q53r` / `Q53m` / `Qh5h3x`.
+- "Clear" empties the whole group; "Done" dismisses.
+
+### Hand Shorthand Transcript
+
+A running **shorthand text** of the hand renders in the gap below the strip (the same zone the picker uses — they never show at once). It unfolds line-by-line as you record, in Courier, and a **Copy** button puts the full multi-line text on the clipboard to paste into a poker chat.
+
+- It is a **pure render of the action log** (computed like the seat visuals), so it tracks Undo/edits automatically and is never out of sync.
+- Grammar (hero label, verb elision, check-around collapse, limp, bare board, showdown result) is defined in full in **`ShorthandReference.md`** — the authoritative source for both the card notation and the action shorthand.
+- Example: `Hero - UTG raise AJo. BTN call.` / `Q53r. Hero chk. BTN 30%. Hero 2.2x. BTN call.` / `Jh. chk chk.` / `5x. Hero 90%. BTN fold.`
 
 ### Villain Profiles *(not yet implemented)*
 
@@ -248,11 +259,11 @@ Both halves operate independently. The user can fill in cards before recording a
 - Geometric table oval with gold rail, felt, gap at dealer station, 6/8/9/10-seat support
 - Session-locked hero seat, per-hand dealer button placement
 - Phase system: selectSeat → placingButton → recordingHand → showdown → handClosed
-- Single Control Bar (bottom, thumb zone) morphing by phase: Rewind · action buttons · Next Street. Action buttons: Fold/Call/Raise (bet context), Check/Bet (no bet)
+- Two-row Control Bar (bottom, thumb zone): a slim utility row (Undo · Next Street) above a full-width primary action row — Fold/Call/Raise (bet context) or Check/Bet (no bet)
 - Unified committed-input model — action buttons and swipes share one settle path (`settleAfterCommit`): record the action, then advance the ring to the next player with no seeded action; a closing action holds and lights Next Street
 - Direct seat tap routing — two separate models: preflop is navigation (tap = jump the action to that seat, folding seats skipped, landing the destination at its default), post-flop is two contexts (no bet = auto-check jump mirroring preflop; bet exists = commit the seat on the clock and advance to the next owing seat). Hero seat is fully participatory; resolved/folded seats no-op; a re-aggression guard forces the highlighted seat to respond before any other tap registers. Highlighted seat cycles in place in both, looping forever with no blank state.
-- Prior-action badges — a seat displays its earlier actions this street as small colored pills (up to 3 slots + "+N" overflow), distinct from its current center action
-- Rewind button (left of the Control Bar): undoes one action, crosses street boundaries, strips system-generated auto-action batches in a single press; re-homes an "ahead" cue (an empty waiting seat, or a decisive close where the cue is on the Next Street button) to the last actor before deleting; reversible at hand close (re-opens a showdown overlay, or peels a fold-out)
+- Prior-action badges — a seat displays its earlier actions this street as small colored pills (up to 3 slots + "+N" overflow), distinct from its current center action. The on-clock seat that owes a fresh response to new aggression (acted earlier, now faces a 3-bet/bet) shows an **empty** center with its earlier action demoted to a pill, until it acts
+- Undo button (`↺`, left of the utility row): undoes one action, crosses street boundaries, strips system-generated auto-action batches in a single press; re-homes an "ahead" cue (an empty waiting seat, or a decisive close where the cue is on the Next Street button) to the last actor before deleting; reversible at hand close (re-opens a showdown overlay, or peels a fold-out)
 - Pulse cue: exactly one seat pulses (the seat on the clock); a committed close hands the pulse to the Next Street button while the acted seat goes plain
 - Street close detection: preflop BB-last rule (limped and raised pots), post-flop check-around, raise-then-respond
 - Preflop fast-forward: Next Street button activates when 2+ committed players, a raise exists, and no committed player faces unresolved aggression — button auto-folds remaining seats and advances to flop
@@ -261,8 +272,8 @@ Both halves operate independently. The user can fill in cards before recording a
 - Showdown overlay (Win / Lose / Chop) triggered on river close with 2+ players
 - Hand outcome summary state with colored status dot and descriptive text; deal the next hand by tapping a seat to place the button (no New Hand button)
 - `handNumber` single source of truth — advances only when the next hand is dealt (tap a seat from the closed state)
-- Inline card picker — rank then suit, suit optional, auto-advances to next empty slot
-- Suited/offsuit shortcuts for hole cards
+- Per-street card picker — docks in the gap below the strip (strip slots are the frames, never covered); one sheet per street (hole pair / flop / turn / river) with rank + suit on one screen, Suited/Offsuit (hole) and Rainbow/Mono (flop) shortcuts, live notation readout
+- Hand shorthand transcript — running Courier text of the hand in the same gap, a pure render of the action log with a Copy-to-clipboard button; grammar in `ShorthandReference.md`
 - Aggression symbols: → = post-flop bet; raise pip-layouts: ↑↑ side-by-side (2-bet), triangle (3-bet), 2×2 grid (4-bet), ↑ + badge number (5-bet+)
 - New Session screen (Cash / Tournament)
 - Login screen (auth buttons wired to state, full auth not yet implemented)
@@ -319,7 +330,7 @@ Both halves operate independently. The user can fill in cards before recording a
 
 | File | Purpose |
 |---|---|
-| `Aeches/HandEntryView.swift` | Full hand recording engine, Control Bar (Rewind · actions · Next Street), card picker, all phase logic |
+| `Aeches/HandEntryView.swift` | Full hand recording engine, two-row Control Bar (Undo · actions · Next Street), per-street card picker, shorthand transcript, all phase logic |
 | `Aeches/SeatSelectionView.swift` | Shared components only: `TableOvalView`, `SeatButtonView`, `SeatState`, `seatPosition()` |
 | `Aeches/Models.swift` | All data models and enums. `calculatePositions()` for position labels. Do not modify. |
 | `Aeches/ContentView.swift` | Tab bar, `RecordTab`, design tokens (`Color` extensions) |
