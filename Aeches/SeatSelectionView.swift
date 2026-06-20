@@ -1,5 +1,31 @@
 import SwiftUI
 
+// MARK: - Pulse
+
+/// A pure-function pulse. Ticks only while `isActive` (paused otherwise → no per-frame cost and
+/// phase is exactly 0). Exposes a 0…1 `phase` so each call site interpolates whatever it wants
+/// (scale, opacity, shadow). This is the single source of pulse motion in the app — there is no
+/// `@State`, no `repeatForever`, and no manual cancellation, so a "stuck pulse" is impossible by
+/// construction. Amplitudes at call sites are intentionally small: the timeline samples the sine
+/// at an arbitrary phase the instant a pulse turns on (no ramp-in), so amplitude *is* the
+/// worst-case activation step — do not raise them.
+struct Pulse<Content: View>: View {
+    let isActive: Bool
+    var frequency: Double = 3.5
+    @ViewBuilder var content: (CGFloat) -> Content   // phase: 0…1 while on, 0 while off
+
+    var body: some View {
+        TimelineView(.animation(paused: !isActive)) { context in
+            content(phase(at: context.date))
+        }
+    }
+
+    private func phase(at date: Date) -> CGFloat {
+        guard isActive else { return 0 }
+        return (sin(date.timeIntervalSinceReferenceDate * frequency) + 1) / 2   // 0…1
+    }
+}
+
 // MARK: - Table Oval View
 
 enum SwipeDirection { case up, down, left, right }
@@ -17,8 +43,6 @@ struct TableOvalView: View {
     var onSeatSize: (Int, String) -> Void = { _, _ in }
     var instruction: String? = nil
     var actionText: String? = nil
-
-    @State private var instructionPulse: Bool = false
 
     // One unified gesture per seat classifies tap / swipe / hold-to-size — no competing gestures.
     @State private var touchSeat: Int? = nil        // seat under the active touch
@@ -159,27 +183,18 @@ struct TableOvalView: View {
 
                 // ── HH watermark / phase instruction / action text ────
                 if let instruction {
-                    Text(instruction)
-                        .font(.custom("Georgia", size: 20))
-                        .fontWeight(.black)
-                        .tracking(3)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(Color.gold.opacity(instructionPulse ? 0.82 : 0.65))
-                        .scaleEffect(instructionPulse ? 1.02 : 1.0)
-                        .shadow(color: Color.gold.opacity(instructionPulse ? 0.18 : 0.0), radius: 8)
-                        .shadow(color: Color.black.opacity(0.7), radius: 4)
-                        .transition(.opacity)
-                        .onAppear {
-                            withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
-                                instructionPulse = true
-                            }
-                        }
-                        .onChange(of: instruction) { _, _ in
-                            instructionPulse = false
-                            withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
-                                instructionPulse = true
-                            }
-                        }
+                    Pulse(isActive: true) { phase in
+                        Text(instruction)
+                            .font(.custom("Georgia", size: 20))
+                            .fontWeight(.black)
+                            .tracking(3)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(Color.gold.opacity(0.65 + 0.17 * phase))
+                            .scaleEffect(1.0 + 0.02 * phase)
+                            .shadow(color: Color.gold.opacity(0.18 * phase), radius: 8)
+                            .shadow(color: Color.black.opacity(0.7), radius: 4)
+                            .transition(.opacity)
+                    }
                 } else if let actionText {
                     Text(actionText)
                         .font(.custom("Georgia", size: 13))
@@ -187,7 +202,6 @@ struct TableOvalView: View {
                         .tracking(1.5)
                         .foregroundStyle(Color.gold.opacity(0.38))
                         .transition(.opacity)
-                        .onAppear { instructionPulse = false }
                 } else {
                     Text("HH")
                         .font(.custom("Georgia", size: 30))
@@ -195,7 +209,6 @@ struct TableOvalView: View {
                         .tracking(-2)
                         .foregroundStyle(Color.gold.opacity(0.07))
                         .transition(.opacity)
-                        .onAppear { instructionPulse = false }
                 }
 
                 // ── Seats ──────────────────────────────────────────────
@@ -362,7 +375,6 @@ struct SeatButtonView: View {
     var position: String? = nil
 
     private let size: CGFloat = 50
-    @State private var pulseScale: CGFloat = 1.0
 
     private var isFoldedOut: Bool { state?.action == .foldedOut }
 
@@ -558,6 +570,12 @@ struct SeatButtonView: View {
     }
 
     var body: some View {
+        Pulse(isActive: isActive) { phase in
+            seatBody.scaleEffect(1.0 + 0.04 * phase)
+        }
+    }
+
+    private var seatBody: some View {
         ZStack {
             if !isFoldedOut {
                 Circle()
@@ -618,29 +636,6 @@ struct SeatButtonView: View {
             }
         }
         .frame(width: size, height: size)
-        // Scale always reads pulseScale (NOT gated by isActive): the onChange below drives it to 1.0
-        // with a finite animation when the seat deactivates, which is what actually cancels the
-        // repeatForever. Gating here would hide that cancel from the rendered scale and leave the
-        // pulse stuck whenever the highlight moves without an ambient animation (e.g. action buttons).
-        .scaleEffect(pulseScale)
-        .onAppear {
-            guard isActive else { return }
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                pulseScale = 1.08
-            }
-        }
-        .onChange(of: isActive) { _, active in
-            if active {
-                pulseScale = 1.0
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    pulseScale = 1.08
-                }
-            } else {
-                // Wrap in an explicit finite animation so the in-flight repeatForever is actually
-                // cancelled — assigning the value plainly does not stop a repeating animation.
-                withAnimation(.easeInOut(duration: 0.2)) { pulseScale = 1.0 }
-            }
-        }
     }
 }
 

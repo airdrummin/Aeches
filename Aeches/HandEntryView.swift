@@ -1415,8 +1415,6 @@ private struct ControlBar: View {
     let onRewind: () -> Void
     let onNextStreet: () -> Void
 
-    @State private var nextStreetPulse: CGFloat = 1.0
-
     var body: some View {
         VStack(spacing: 0) {
             Rectangle()
@@ -1469,6 +1467,13 @@ private struct ControlBar: View {
     // MARK: Next Street / End Hand (right)
 
     private var nextStreetButton: some View {
+        // Pulses only on a decisive street close — the cue hands off here from the seat ring.
+        Pulse(isActive: nextStreetPulsing) { phase in
+            nextStreetButtonBody.scaleEffect(1.0 + 0.05 * phase)
+        }
+    }
+
+    private var nextStreetButtonBody: some View {
         Button(action: onNextStreet) {
             HStack(spacing: 3) {
                 Text(nextStreetLabel)
@@ -1506,18 +1511,6 @@ private struct ControlBar: View {
         .buttonStyle(.plain)
         .disabled(!nextStreetEnabled)
         .opacity(nextStreetEnabled ? 1.0 : 0.55)
-        // Pulses only on a decisive street close — the cue hands off here from the seat ring.
-        .scaleEffect(nextStreetPulsing ? nextStreetPulse : 1.0)
-        .onChange(of: nextStreetPulsing) { _, pulsing in
-            if pulsing {
-                nextStreetPulse = 1.0
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    nextStreetPulse = 1.06
-                }
-            } else {
-                withAnimation(.easeInOut(duration: 0.2)) { nextStreetPulse = 1.0 }
-            }
-        }
     }
 
     // MARK: Context-aware action buttons (middle)
