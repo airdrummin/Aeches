@@ -214,6 +214,10 @@ struct TableOvalView: View {
                     // DragGesture(minimumDistance: 0) avoids the gesture-arbitration conflicts that
                     // break taps when .onTapGesture / .simultaneousGesture / .highPriorityGesture are
                     // layered together. At minimumDistance 0, onEnded fires even for a stationary tap.
+                    // Lessons (do not "refactor" back into multiple recognizers): SwiftUI can't reliably
+                    // split tap/swipe/hold across separate gestures (iOS 18 worsens it), and gating the
+                    // swipe behind a shared "a hold happened" flag leaves it stuck and kills later swipes.
+                    // Tuning dials: swipe threshold 12pt, hold delay 0.3s, drag→size map in sizeIndex.
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in

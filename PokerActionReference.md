@@ -200,6 +200,10 @@ shown as `→`); only a wager that re-raises an existing bet is a **raise** (`.r
 There is no rewind via seat tap in either model; use the Rewind button instead.
 
 **Swipes** are a decisive shortcut layered over this same model: a directional swipe records a chosen
-action (← Fold, ↑ Raise, → Bet, ↓ Call/Check) in one gesture and advances to the next player, and a
-press-and-hold attaches a size to a bet/raise. Swipes follow the same routing, guards, and
-street-close logic above — they never auto-advance the street. Full detail in `SwipeInteractionSpec.md`.
+action (← Fold, ↑ Raise, → Bet, ↓ Call/Check) in one gesture — picking the action directly instead
+of cycling to it — and a press-and-hold attaches a size to a bet/raise. The highlight **stays on the
+swiped seat** (just like a tap-cycle); a swipe never moves the action to the next player, because
+doing so would force the app to seed that seat's action and commit a decision the user never made.
+The user advances by aiming the next gesture at the next seat. Swipes follow the same routing, guards,
+and street-close logic above — they never auto-advance the street. Implemented in `HandEntryView.swift`
+(routing) and `SeatSelectionView.swift` (gestures).

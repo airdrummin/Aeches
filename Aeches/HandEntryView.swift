@@ -626,24 +626,17 @@ struct HandEntryView: View {
         finishSwipe(on: seat, action: action, sizing: sizing)
     }
 
-    /// Shared tail: record the action on `seat`, handle fold-out, then move to the next player —
-    /// UNLESS this action closes the street, in which case the highlight stays on the seat that just
-    /// acted (advancing onto an already-acted player would be confusing) and the Flop / Turn / River
-    /// button lights up. Swipes never auto-advance the street; only that button does.
+    /// Shared tail: record the action on `seat`, handle fold-out, then keep the highlight ON the
+    /// seat that just acted — exactly like a tap-cycle. A swipe is "pick this action directly"
+    /// rather than "cycle to it"; it does NOT move the action to the next player. The user advances
+    /// by aiming the next gesture at the next seat (a tap/swipe there commits this seat's standing
+    /// action and lands the target, auto-folding/-checking anyone skipped — same as the tap model).
+    /// This avoids silently seeding an unintended action onto the next seat. Swipes never advance
+    /// the street either; only the Next Street button does (it lights when `streetIsClosed`).
     private func finishSwipe(on seat: Int, action: ActionType, sizing: RaiseSizing? = nil) {
         recordAction(action, for: seat, sizing: sizing)
         if action == .fold && activeSeatSequence.count == 1 { triggerFoldOut(); return }
         highlightedSeat = seat
-        // Street complete → stay on the acting seat (the Next Street button lights). Otherwise move to
-        // the next seat that owes action and SEED its default (call facing a bet, else check) — the
-        // same thing the tap flow does on arrival. This keeps the next seat "live" (its prior action
-        // shows as a pill, not as the current action) and gives Rewind an entry to peel, so it steps
-        // back through this seat instead of skipping past it.
-        guard !streetIsClosed() else { return }
-        if let next = nextOwingSeat(after: seat) {
-            highlightedSeat = next
-            recordAction(seatFacesBet(next) ? .call : .check, for: next)
-        }
     }
 
     // MARK: - Seat Sizing (hold-to-size, Phase 2)
