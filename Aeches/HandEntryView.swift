@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - StreetName Extension
 
@@ -26,7 +27,6 @@ struct HandEntryView: View {
     // Hand state
     @State private var handNumber: Int = 1
     @State private var buttonSeat: Int? = nil
-    @State private var seatActions: [Int: SeatState] = [:]
 
     // Street state
     @State private var currentStreet: StreetName = .preflop
@@ -51,8 +51,10 @@ struct HandEntryView: View {
     @State private var riverCard: CardSlot    = CardSlot()
 
     // Card picker state
-    @State private var activeSlot: SlotID? = nil
-    @State private var pickingRank: String? = nil
+    // Card entry is per-street group (hole pair / flop / turn / river), not a single slot. `entryStreet`
+    // is the open group (nil = picker closed); `focusIndex` is the frame within it being edited.
+    @State private var entryStreet: CardStreet? = nil
+    @State private var focusIndex: Int = 0
 
     // Hand-close state
     @State private var handCloseSummary: String = ""
@@ -259,7 +261,21 @@ struct HandEntryView: View {
                         .padding(.top, 10)
                 }
 
-                Spacer()
+                // ── Gap zone — the shorthand transcript by default, or the card picker while a card
+                // group is open. The strip slots stay visible above either way; the two never show
+                // at once (you're either reading the line or entering a card).
+                if entryStreet != nil {
+                    Spacer(minLength: 0)
+                    cardPickerPanel
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    if (phase == .recordingHand || phase == .showdown || phase == .handClosed),
+                       !handShorthand.isEmpty {
+                        transcriptPanel
+                            .padding(.top, 12)
+                    }
+                    Spacer(minLength: 0)
+                }
             }
         }
         // ── Unified control row (Rewind · actions · Next Street) ────────
@@ -280,14 +296,7 @@ struct HandEntryView: View {
                 )
             }
         }
-        // ── Card picker overlay ────────────────────────────────────────
-        .overlay(alignment: .bottom) {
-            if activeSlot != nil {
-                cardPickerPanel
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: activeSlot != nil)
+        .animation(.easeInOut(duration: 0.2), value: entryStreet != nil)
         .animation(.easeInOut(duration: 0.2), value: phase)
     }
 
@@ -731,7 +740,10 @@ struct HandEntryView: View {
         highlightedSeat = nil
     }
 
-    private func syncSeatActions() {
+    /// Seat visuals, derived purely from the append-only log plus the current cue. Computed (not
+    /// stored) so it always reflects the latest `highlightedSeat` — the moment a committed input
+    /// advances the cue, the seat it lands on re-derives, with no resync plumbing.
+    private var seatActions: [Int: SeatState] {
         var result: [Int: SeatState] = [:]
 
         // Ghost seats for folds that happened on prior streets
@@ -762,6 +774,15 @@ struct HandEntryView: View {
         // The most recent entry is the seat's current state; everything before it is shown as
         // prior-action badges (oldest first).
         for (seat, history) in histories {
+            // The seat on the clock that owes a FRESH response — it acted earlier this street but a
+            // bet/raise was logged after (e.g. an opener facing a 3-bet, or a checker facing a bet) —
+            // has not made its current decision yet. Demote its whole history to prior pills and leave
+            // the center empty, so it reads like any other on-the-clock seat. Only the on-clock seat
+            // does this; other owing seats keep their last action shown until the cue reaches them.
+            if seat == highlightedSeat, owesAction(seat) {
+                result[seat] = SeatState(action: nil, priorActions: history.map { $0.action })
+                continue
+            }
             let current = history.last!
             let prior = history.dropLast().map { $0.action }
             let sizeLabel = actionsThisStreet.last { $0.seatIndex == seat }?.sizing?.label
@@ -772,7 +793,7 @@ struct HandEntryView: View {
                 sizeLabel: sizeLabel
             )
         }
-        seatActions = result
+        return result
     }
 
     // MARK: - Undo
@@ -865,7 +886,6 @@ struct HandEntryView: View {
         betLevelThisStreet = actionsThisStreet.filter {
             $0.actionType == .open || $0.actionType == .raise
         }.count
-        syncSeatActions()
     }
 
     // MARK: - Street Close Detection
@@ -1075,38 +1095,38 @@ struct HandEntryView: View {
 
     private var cardStrip: some View {
         HStack(alignment: .top, spacing: 0) {
-            streetSection(label: "HOLE", isActive: currentStreet == .preflop) {
+            streetSection(label: "HOLE", isActive: entryStreet == .hole || currentStreet == .preflop) {
                 HStack(spacing: 4) {
                     ForEach(0..<2, id: \.self) { i in
-                        CardSlotView(slot: heroCards[i], isActive: activeSlot == .hero(i))
-                            .onTapGesture { openPicker(for: .hero(i)) }
+                        CardSlotView(slot: heroCards[i], isActive: entryStreet == .hole && focusIndex == i)
+                            .onTapGesture { openCardEntry(.hole, focus: i) }
                     }
                 }
             }
 
             Spacer()
 
-            streetSection(label: "FLOP", isActive: currentStreet == .flop) {
+            streetSection(label: "FLOP", isActive: entryStreet == .flop || currentStreet == .flop) {
                 HStack(spacing: 4) {
                     ForEach(0..<3, id: \.self) { i in
-                        CardSlotView(slot: flopCards[i], isActive: activeSlot == .flop(i))
-                            .onTapGesture { openPicker(for: .flop(i)) }
+                        CardSlotView(slot: flopCards[i], isActive: entryStreet == .flop && focusIndex == i)
+                            .onTapGesture { openCardEntry(.flop, focus: i) }
                     }
                 }
             }
 
             Spacer()
 
-            streetSection(label: "TURN", isActive: currentStreet == .turn) {
-                CardSlotView(slot: turnCard, isActive: activeSlot == .turn)
-                    .onTapGesture { openPicker(for: .turn) }
+            streetSection(label: "TURN", isActive: entryStreet == .turn || currentStreet == .turn) {
+                CardSlotView(slot: turnCard, isActive: entryStreet == .turn)
+                    .onTapGesture { openCardEntry(.turn) }
             }
 
             Spacer()
 
-            streetSection(label: "RIVER", isActive: currentStreet == .river) {
-                CardSlotView(slot: riverCard, isActive: activeSlot == .river)
-                    .onTapGesture { openPicker(for: .river) }
+            streetSection(label: "RIVER", isActive: entryStreet == .river || currentStreet == .river) {
+                CardSlotView(slot: riverCard, isActive: entryStreet == .river)
+                    .onTapGesture { openCardEntry(.river) }
             }
         }
         .padding(.horizontal, 12)
@@ -1139,99 +1159,123 @@ struct HandEntryView: View {
 
     // MARK: - Card Picker Panel
 
+    // Docked below the strip (not a covering sheet). The strip slots are the frames — they stay
+    // visible and highlight the focused one — so the picker shows only the controls, no duplicate cards.
     private var cardPickerPanel: some View {
         VStack(spacing: 0) {
-            // Drag handle
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.borderDark)
-                .frame(width: 36, height: 4)
-                .padding(.top, 10)
-                .padding(.bottom, 14)
+            if let street = entryStreet {
+                let notation = groupNotation(street)
 
-            // Current notation display
-            let notation = currentSlotNotation
-            Text(notation.isEmpty ? "· · ·" : notation)
-                .font(.custom("Courier New", size: 18))
-                .fontWeight(.bold)
-                .tracking(3)
-                .foregroundStyle(notation.isEmpty ? Color.textMuted : Color.goldLight)
-                .frame(maxWidth: .infinity)
-                .padding(.bottom, 14)
-
-            if let rank = pickingRank {
-                // Suit picker
-                HStack(spacing: 12) {
-                    ForEach(["♠", "♥", "♦", "♣"], id: \.self) { suit in
-                        Button(action: { commitCard(rank: rank, suit: suit) }) {
-                            Text(suit)
-                                .font(.system(size: 28))
-                                .foregroundStyle(["♥", "♦"].contains(suit) ? Color(hex: "#E74C3C") : Color.white)
-                                .frame(width: 64, height: 64)
-                                .background(Color.surface2)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.borderDark, lineWidth: 1))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    // Unknown suit
-                    Button(action: { commitCard(rank: rank, suit: nil) }) {
-                        Text("?")
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(Color.textMuted)
-                            .frame(width: 64, height: 64)
-                            .background(Color.surface2)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.borderDark, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.bottom, 16)
-            } else {
-                // Rank grid
-                VStack(spacing: 6) {
-                    rankRow(["A","K","Q","J","T","9","8"])
-                    rankRow(["7","6","5","4","3","2"])
-                }
-                .padding(.bottom, 8)
-
-                // Suited / offsuit shortcuts (hole cards only)
-                if isHoleCardSlot {
-                    HStack(spacing: 10) {
-                        qualifierButton("s", label: "Suited")
-                        qualifierButton("o", label: "Offsuit")
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 8)
-                }
-
-                // Clear / dismiss
+                // Header: Clear · live shorthand notation · Done
                 HStack {
-                    Button("Clear") { clearCurrentSlot() }
+                    Button("Clear") { clearEntryGroup() }
                         .font(.custom("Arial", size: 13))
                         .foregroundStyle(Color.foldRed)
                     Spacer()
-                    Button("Done") { closePicker() }
+                    Text(notation.isEmpty ? "· · ·" : notation)
+                        .font(.custom("Courier New", size: 16))
+                        .fontWeight(.bold)
+                        .tracking(2)
+                        .foregroundStyle(notation.isEmpty ? Color.textMuted : Color.goldLight)
+                    Spacer()
+                    Button("Done") { closeEntry() }
                         .font(.custom("Arial", size: 13))
                         .fontWeight(.semibold)
                         .foregroundStyle(Color.gold)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 16)
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 12)
+
+                // Rank grid — 7, then a centered 6 that nests into the gaps above.
+                VStack(spacing: 6) {
+                    rankRow(["A","K","Q","J","T","9","8"])
+                    rankRow(["7","6","5","4","3","2"])
+                }
+                .padding(.bottom, 12)
+
+                // Suit row — five separate taps; "?" leaves the suit unknown.
+                HStack(spacing: 7) {
+                    suitButton("♠"); suitButton("♥"); suitButton("♦"); suitButton("♣")
+                    unknownSuitButton()
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+
+                // Shortcut row — suited/offsuit (hole) or rainbow/mono (flop); none for turn/river.
+                shortcutRow(for: street)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
             }
         }
-        .background(Color.surface.ignoresSafeArea(edges: .bottom))
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .shadow(color: .black.opacity(0.5), radius: 20, y: -4)
+        .frame(maxWidth: .infinity)
+        .background(Color.surface)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.borderDark.opacity(0.6)).frame(height: 1)
+        }
+    }
+
+    // MARK: - Shorthand Transcript Panel
+
+    /// Fills the gap below the strip (when the picker is closed): the live shorthand, Courier, with a
+    /// Copy button and auto-scroll to the newest line.
+    private var transcriptPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("HAND")
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(2)
+                    .foregroundStyle(Color.gold)
+                Spacer()
+                Button(action: copyShorthand) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.on.doc").font(.system(size: 11))
+                        Text("Copy").font(.custom("Arial", size: 12))
+                    }
+                    .foregroundStyle(Color.textBody)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .overlay(Capsule().stroke(Color.borderDark, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(handShorthand)
+                        .font(.custom("Courier New", size: 13))
+                        .foregroundStyle(Color.textBody)
+                        .lineSpacing(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                    Color.clear.frame(height: 1).id("transcriptEnd")
+                }
+                .frame(height: 112)
+                .onChange(of: handShorthand) { _, _ in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo("transcriptEnd", anchor: .bottom)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(hex: "#121212")))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(hex: "#2A2A2A"), lineWidth: 1))
+        .padding(.horizontal, 12)
+    }
+
+    private func copyShorthand() {
+        UIPasteboard.general.string = handShorthand
     }
 
     @ViewBuilder
     private func rankRow(_ ranks: [String]) -> some View {
         HStack(spacing: 6) {
             ForEach(ranks, id: \.self) { r in
-                Button(action: { pickingRank = r }) {
+                Button(action: { rankTapped(r) }) {
                     Text(r)
                         .font(.system(size: 16, weight: .bold))
-                        .frame(width: 40, height: 42)
+                        .frame(width: 40, height: 40)
                         .background(Color.surface2)
                         .foregroundStyle(Color.textBody)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -1242,20 +1286,60 @@ struct HandEntryView: View {
         }
     }
 
+    private func suitButton(_ suit: String) -> some View {
+        Button(action: { suitTapped(suit) }) {
+            Text(suit)
+                .font(.system(size: 22))
+                .foregroundStyle(["♥", "♦"].contains(suit) ? Color(hex: "#E74C3C") : Color.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(Color.surface2)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.borderDark, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func unknownSuitButton() -> some View {
+        Button(action: { suitTapped(nil) }) {
+            Text("?")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(Color.textMuted)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(Color.surface2)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.borderDark, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder
-    private func qualifierButton(_ key: String, label: String) -> some View {
-        Button(action: {
-            if let slot = activeSlot, let rank = currentFirstRank {
-                setSlot(slot, to: CardSlot(rank: rank, suit: nil, qualifier: key))
-                closePicker()
+    private func shortcutRow(for street: CardStreet) -> some View {
+        switch street {
+        case .hole:
+            HStack(spacing: 7) {
+                shortcutButton("Suited")  { relationshipTapped("s") }
+                shortcutButton("Offsuit") { relationshipTapped("o") }
             }
-        }) {
-            Text("\(label) (\(key))")
-                .font(.custom("Arial", size: 14))
+        case .flop:
+            HStack(spacing: 7) {
+                shortcutButton("Rainbow") { textureTapped("r") }
+                shortcutButton("Mono")    { textureTapped("m") }
+            }
+        case .turn, .river:
+            EmptyView()
+        }
+    }
+
+    private func shortcutButton(_ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.custom("Arial", size: 13))
                 .fontWeight(.semibold)
                 .foregroundStyle(Color.goldLight)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                .padding(.vertical, 11)
                 .background(Color.surface2)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gold.opacity(0.3), lineWidth: 1))
@@ -1263,84 +1347,225 @@ struct HandEntryView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Slot Helpers
+    // MARK: - Card Entry (per-street group)
 
-    enum SlotID: Equatable {
-        case hero(Int), flop(Int), turn, river
-    }
-
-    private var isHoleCardSlot: Bool {
-        if case .hero(_) = activeSlot { return true }
-        return false
-    }
-
-    private var currentFirstRank: String? {
-        guard case .hero(let i) = activeSlot else { return nil }
-        return i == 1 ? heroCards[0].rank : nil
-    }
-
-    private var currentSlotNotation: String {
-        guard let slot = activeSlot else { return "" }
-        switch slot {
-        case .hero(let i): return heroCards[i].notation
-        case .flop(let i): return flopCards[i].notation
-        case .turn:        return turnCard.notation
-        case .river:       return riverCard.notation
-        }
-    }
-
-    private func openPicker(for slot: SlotID) {
-        pickingRank = nil
-        activeSlot = slot
-    }
-
-    private func closePicker() {
-        pickingRank = nil
-        activeSlot = nil
-    }
-
-    private func commitCard(rank: String, suit: String?) {
-        guard let slot = activeSlot else { return }
-        setSlot(slot, to: CardSlot(rank: rank, suit: suit, qualifier: nil))
-        pickingRank = nil
-        // Auto-advance to next empty slot
-        if let next = nextEmptySlot(after: slot) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                openPicker(for: next)
-            }
-        } else {
-            closePicker()
-        }
-    }
-
-    private func setSlot(_ slot: SlotID, to card: CardSlot) {
-        switch slot {
-        case .hero(let i): heroCards[i] = card
-        case .flop(let i): flopCards[i] = card
-        case .turn:        turnCard = card
-        case .river:       riverCard = card
-        }
-    }
-
-    private func clearCurrentSlot() {
-        guard let slot = activeSlot else { return }
-        setSlot(slot, to: CardSlot())
-        pickingRank = nil
-    }
-
-    private func nextEmptySlot(after slot: SlotID) -> SlotID? {
-        let order: [SlotID] = [.hero(0), .hero(1), .flop(0), .flop(1), .flop(2), .turn, .river]
-        guard let idx = order.firstIndex(of: slot) else { return nil }
-        for i in (idx+1)..<order.count {
-            let s = order[i]
-            switch s {
-            case .hero(let j): if heroCards[j].rank == nil { return s }
-            case .flop(let j): if flopCards[j].rank == nil { return s }
-            case .turn:        if turnCard.rank == nil { return s }
-            case .river:       if riverCard.rank == nil { return s }
+    /// A street's group of card frames: hole = 2, flop = 3, turn/river = 1.
+    enum CardStreet: Equatable {
+        case hole, flop, turn, river
+        var count: Int {
+            switch self {
+            case .hole: return 2
+            case .flop: return 3
+            case .turn, .river: return 1
             }
         }
-        return nil
+    }
+
+    /// The live card slots for a group (turn/river wrap their single slot in an array).
+    private func groupCards(_ street: CardStreet) -> [CardSlot] {
+        switch street {
+        case .hole:  return heroCards
+        case .flop:  return flopCards
+        case .turn:  return [turnCard]
+        case .river: return [riverCard]
+        }
+    }
+
+    private func setGroupCard(_ street: CardStreet, _ i: Int, _ card: CardSlot) {
+        switch street {
+        case .hole:  heroCards[i] = card
+        case .flop:  flopCards[i] = card
+        case .turn:  turnCard = card
+        case .river: riverCard = card
+        }
+    }
+
+    private func openCardEntry(_ street: CardStreet, focus: Int? = nil) {
+        entryStreet = street
+        focusIndex = focus ?? (groupCards(street).firstIndex(where: { $0.isEmpty }) ?? 0)
+    }
+
+    private func closeEntry() {
+        entryStreet = nil
+    }
+
+    private func clearEntryGroup() {
+        guard let street = entryStreet else { return }
+        for i in 0..<street.count { setGroupCard(street, i, CardSlot()) }
+        focusIndex = 0
+    }
+
+    /// Tap a rank → fill the focused frame, then advance focus to the next frame still missing a rank
+    /// (or back to the first frame once the group is full, ready for suiting).
+    private func rankTapped(_ r: String) {
+        guard let street = entryStreet else { return }
+        var card = groupCards(street)[focusIndex]
+        card.rank = r
+        card.qualifier = nil
+        setGroupCard(street, focusIndex, card)
+        focusIndex = groupCards(street).firstIndex(where: { $0.isEmpty }) ?? 0
+    }
+
+    /// Tap a suit (or "?" → nil) → set the focused frame's suit, then advance to the next frame.
+    private func suitTapped(_ suit: String?) {
+        guard let street = entryStreet else { return }
+        guard groupCards(street)[focusIndex].rank != nil else { return }   // nothing to suit yet
+        var card = groupCards(street)[focusIndex]
+        card.suit = suit
+        card.qualifier = nil
+        setGroupCard(street, focusIndex, card)
+        focusIndex = (focusIndex + 1) % street.count
+    }
+
+    /// Hole-only: suited / offsuit relationship — applies to both cards, clearing any explicit suits.
+    private func relationshipTapped(_ q: String) {
+        guard entryStreet == .hole else { return }
+        for i in 0..<2 where heroCards[i].rank != nil {
+            heroCards[i].suit = nil
+            heroCards[i].qualifier = q
+        }
+    }
+
+    /// Flop-only: rainbow ("r") / monotone ("m") texture — a group flag, no specific suits assigned.
+    private func textureTapped(_ t: String) {
+        guard entryStreet == .flop else { return }
+        for i in 0..<3 where flopCards[i].rank != nil {
+            flopCards[i].suit = nil
+            flopCards[i].qualifier = t
+        }
+    }
+
+    // MARK: - Card Notation (group readout — see ShorthandReference.md §2)
+
+    private func suitLetter(_ s: String) -> String {
+        switch s {
+        case "♠": return "s"; case "♥": return "h"; case "♦": return "d"; case "♣": return "c"
+        default:  return ""
+        }
+    }
+
+    /// One card's token: rank + suit-letter, or rank + "x" when the suit is unknown but worth marking.
+    private func cardToken(_ c: CardSlot, markUnknown: Bool) -> String {
+        guard let r = c.rank else { return "" }
+        if let s = c.suit { return r + suitLetter(s) }
+        return markUnknown ? r + "x" : r
+    }
+
+    /// The group's shorthand for the picker readout: AJs / AsJx / Q53r / Qh5h3x / Jh / 5x.
+    private func groupNotation(_ street: CardStreet) -> String {
+        let cards = groupCards(street)
+        switch street {
+        case .hole:
+            if cards.count == 2, let r0 = cards[0].rank, let r1 = cards[1].rank,
+               let q = cards[0].qualifier, q == cards[1].qualifier {
+                return r0 + r1 + q                                  // AJs / AJo
+            }
+            let anySuit = cards.contains { $0.suit != nil }
+            return cards.map { cardToken($0, markUnknown: anySuit) }.joined()
+        case .flop:
+            if cards.allSatisfy({ $0.rank != nil }),
+               let t = cards[0].qualifier, cards.allSatisfy({ $0.qualifier == t }) {
+                return cards.compactMap { $0.rank }.joined() + t    // Q53r / Q53m
+            }
+            let anySuit = cards.contains { $0.suit != nil }
+            return cards.map { cardToken($0, markUnknown: anySuit) }.joined()
+        case .turn, .river:
+            return cards.map { cardToken($0, markUnknown: false) }.joined()
+        }
+    }
+
+    // MARK: - Hand Shorthand (see ShorthandReference.md)
+
+    /// The running shorthand transcript — a pure render of the action log + board + hero cards.
+    /// Computed (like `seatActions`) so it tracks Rewind/edits automatically.
+    private var handShorthand: String {
+        let hero = heroSeat ?? -1
+        let order: [StreetName] = [.preflop, .flop, .turn, .river]
+        let currentIdx = order.firstIndex(of: currentStreet) ?? 0
+
+        var lines: [String] = []
+        var heroDeclared = false
+
+        for street in order.prefix(currentIdx + 1) {
+            let acts = actions(on: street)
+            let board = boardToken(for: street)
+            if acts.isEmpty && board.isEmpty { continue }
+
+            var segments: [String] = []
+            if !board.isEmpty { segments.append(board) }   // bare board leads post-flop lines
+
+            let isPreflop = (street == .preflop)
+            if !acts.isEmpty && acts.allSatisfy({ $0.actionType == .check }) {
+                // Pure check-around → bare checks, no names.
+                segments.append(acts.map { _ in "chk" }.joined(separator: " "))
+            } else {
+                var aggCount = 0
+                var sawAgg = false
+                for a in acts {
+                    let isAgg = (a.actionType == .open || a.actionType == .raise)
+                    if isAgg { aggCount += 1 }
+                    let token = actionToken(a, isPreflop: isPreflop, aggIndex: aggCount, priorAggression: sawAgg)
+                    if isAgg { sawAgg = true }
+                    segments.append(actorSegment(a, token: token, hero: hero, heroDeclared: &heroDeclared))
+                }
+            }
+
+            if !segments.isEmpty { lines.append(segments.joined(separator: ". ") + ".") }
+        }
+
+        // Showdown gets a result line (the outcome isn't derivable from the action); a fold-out implies
+        // the winner with no tag. savedHands.last carries this hand's outcome at close (nil = fold-out).
+        if phase == .handClosed, let outcome = savedHands.last?.outcome {
+            switch outcome {
+            case .win:  lines.append("Hero wins.")
+            case .lose: lines.append("Hero loses.")
+            case .chop: lines.append("Chop.")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    /// Recorded actions on a street: completed streets live in `streets`, the live one in `actionsThisStreet`.
+    private func actions(on street: StreetName) -> [Action] {
+        if let s = streets.first(where: { $0.name == street }) { return s.actions }
+        if street == currentStreet { return actionsThisStreet }
+        return []
+    }
+
+    /// The bare board token leading a post-flop line (empty preflop). Reuses the card-notation formatter.
+    private func boardToken(for street: StreetName) -> String {
+        switch street {
+        case .preflop: return ""
+        case .flop:    return groupNotation(.flop)
+        case .turn:    return groupNotation(.turn)
+        case .river:   return groupNotation(.river)
+        }
+    }
+
+    /// The verb-or-size token for one action. Elision: a sized wager shows just the size (All-in → jam).
+    private func actionToken(_ a: Action, isPreflop: Bool, aggIndex: Int, priorAggression: Bool) -> String {
+        switch a.actionType {
+        case .fold:  return "fold"
+        case .check: return "chk"
+        case .call:  return (isPreflop && !priorAggression) ? "limp" : "call"
+        case .open:
+            if let label = a.sizing?.label { return label == "All-in" ? "jam" : label }
+            return isPreflop ? "raise" : "bet"
+        case .raise:
+            if let label = a.sizing?.label { return label == "All-in" ? "jam" : label }
+            return isPreflop ? "\(aggIndex + 1)-bet" : "raise"   // 1st reraise (aggIndex 2) → 3-bet
+        }
+    }
+
+    /// "<actor> <token>", declaring Hero once (with position + hole cards) at Hero's first action.
+    private func actorSegment(_ a: Action, token: String, hero: Int, heroDeclared: inout Bool) -> String {
+        guard a.seatIndex == hero else { return "\(a.position) \(token)" }
+        if heroDeclared { return "Hero \(token)" }
+        heroDeclared = true
+        let cards = groupNotation(.hole)
+        let base = "Hero - \(a.position) \(token)"
+        return cards.isEmpty ? base : "\(base) \(cards)"
     }
 
     // MARK: - Hand Lifecycle
@@ -1348,14 +1573,13 @@ struct HandEntryView: View {
     /// Clears all per-hand state (actions, streets, cards) while preserving the session-locked hero
     /// seat and table size. Does NOT set `phase` — the caller decides the next phase.
     private func resetHandState() {
-        seatActions = [:]
         buttonSeat = nil
         heroCards  = [CardSlot(), CardSlot()]
         flopCards  = [CardSlot(), CardSlot(), CardSlot()]
         turnCard   = CardSlot()
         riverCard  = CardSlot()
-        pickingRank = nil
-        activeSlot  = nil
+        entryStreet = nil
+        focusIndex  = 0
         currentStreet = .preflop
         streets = []
         actionsThisStreet = []
@@ -1427,29 +1651,34 @@ private struct ControlBar: View {
                 .fill(Color.borderDark)
                 .frame(height: 1)
 
-            HStack(spacing: 0) {
-                rewindButton
-                Spacer()
+            VStack(spacing: 10) {
+                // Utility row — Undo (left) · Next Street (right). Stays visible when the hand is
+                // closed (Undo only); Next Street and the action row are recording-only.
+                HStack(spacing: 0) {
+                    undoButton
+                    Spacer()
+                    if isRecording { nextStreetButton }
+                }
+                // Primary row — full-width action buttons, the most-used controls in the thumb zone.
                 if isRecording {
                     actionButtons
-                    Spacer()
-                    nextStreetButton
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 14)
         }
         .background(Color.surface)
     }
 
-    // MARK: Rewind (left)
+    // MARK: Undo (utility row, left)
 
-    private var rewindButton: some View {
+    private var undoButton: some View {
         Button(action: onRewind) {
-            HStack(spacing: 3) {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 9, weight: .bold))
-                Text("Rewind")
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 11, weight: .bold))
+                Text("Undo")
                     .font(.custom("Arial", size: 11))
                     .fontWeight(.bold)
                     .tracking(0.5)
@@ -1538,6 +1767,8 @@ private struct ControlBar: View {
         }
     }
 
+    // Each chip fills its share of the row so Fold/Call/Raise span the full width.
+
     private enum ChipStyle { case neutral, aggressive, destructive }
 
     @ViewBuilder
@@ -1548,7 +1779,8 @@ private struct ControlBar: View {
                 .font(.custom("Arial", size: 14))
                 .fontWeight(.bold)
                 .foregroundStyle(chipForeground(style))
-                .frame(width: 68, height: 44)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
                 .background(chipBackground(style))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(
