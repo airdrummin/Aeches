@@ -201,9 +201,33 @@ There is no rewind via seat tap in either model; use the Rewind button instead.
 
 **Swipes** are a decisive shortcut layered over this same model: a directional swipe records a chosen
 action (← Fold, ↑ Raise, → Bet, ↓ Call/Check) in one gesture — picking the action directly instead
-of cycling to it — and a press-and-hold attaches a size to a bet/raise. The highlight **stays on the
-swiped seat** (just like a tap-cycle); a swipe never moves the action to the next player, because
-doing so would force the app to seed that seat's action and commit a decision the user never made.
-The user advances by aiming the next gesture at the next seat. Swipes follow the same routing, guards,
-and street-close logic above — they never auto-advance the street. Implemented in `HandEntryView.swift`
-(routing) and `SeatSelectionView.swift` (gestures).
+of cycling to it — and a press-and-hold attaches a size to a bet/raise. After recording, a swipe
+**advances the ring to the next player without seeding any action on it** — the next seat enters
+empty/waiting. This is identical to an action-button press; both share one settle path
+(`settleAfterCommit`). Crucially the swipe does **not** seed the next seat (that would commit a
+decision the user never made — tapping past an empty seat later auto-folds/-checks it correctly).
+Swipes follow the same routing and guards above and **never advance the street** — a closing swipe
+holds on the acting seat and lights the Next Street button.
+
+**Action buttons** (Fold/Call/Raise · Check/Bet) act on the seat on the clock, then settle exactly
+like a swipe (record → advance the ring to the next player, no seed). The only control that advances
+a street is the **Next Street button**; no action button, tap, or swipe ever does.
+
+**The pulse cue.** Exactly one thing pulses at a time: the seat on the clock. When a committed input
+(button/swipe) completes the betting round, the acting seat's highlight clears and the **Next Street
+button pulses instead** — the cue to advance. (A round completed by tapping leaves the seat pulsing
+and the button lit-but-calm, since taps are tentative.)
+
+**Rewind.** One undo. Recording is two kinds of step — a *cue-advance* (the ring/pulse moves, no log
+entry) and an *action* (a log entry); Rewind reverses a cue-advance before it deletes anything. The
+cue sits "ahead of the log" in two equivalent forms: on an *empty waiting seat* (after an
+advance-no-seed) or on the *Next Street button* (after a decisive close). In either case the first
+Rewind returns the cue to the last actor (showing their action) **without deleting**; a further press
+then undoes that action. Beyond that it peels the last action, crossing street boundaries and
+stripping system-generated auto-action batches in a single press. Rewind is **reversible at hand
+close**: after a fold-out it re-opens recording and peels the fold; after a resolved showdown it
+re-opens the Win/Lose/Chop overlay to re-pick.
+
+**Dealing the next hand.** There is no New Hand button. From the closed state, tapping any seat
+places the dealer button there and deals the next hand (the same gesture as the first hand's button
+placement). Implemented in `HandEntryView.swift` (routing) and `SeatSelectionView.swift` (gestures).

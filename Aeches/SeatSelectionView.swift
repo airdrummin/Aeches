@@ -618,7 +618,11 @@ struct SeatButtonView: View {
             }
         }
         .frame(width: size, height: size)
-        .scaleEffect(isActive ? pulseScale : 1.0)
+        // Scale always reads pulseScale (NOT gated by isActive): the onChange below drives it to 1.0
+        // with a finite animation when the seat deactivates, which is what actually cancels the
+        // repeatForever. Gating here would hide that cancel from the rendered scale and leave the
+        // pulse stuck whenever the highlight moves without an ambient animation (e.g. action buttons).
+        .scaleEffect(pulseScale)
         .onAppear {
             guard isActive else { return }
             withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
@@ -627,11 +631,14 @@ struct SeatButtonView: View {
         }
         .onChange(of: isActive) { _, active in
             if active {
+                pulseScale = 1.0
                 withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
                     pulseScale = 1.08
                 }
             } else {
-                pulseScale = 1.0
+                // Wrap in an explicit finite animation so the in-flight repeatForever is actually
+                // cancelled — assigning the value plainly does not stop a repeating animation.
+                withAnimation(.easeInOut(duration: 0.2)) { pulseScale = 1.0 }
             }
         }
     }

@@ -38,6 +38,12 @@ struct HandEntryView: View {
     @State private var highlightedSeat: Int? = nil
     @State private var savedHands: [Hand] = []
 
+    /// True only when a decisive input (swipe / action button) on the last actor completed the
+    /// betting round, so the ring is held on that seat awaiting a Next Street tap. In this state the
+    /// seat drops its highlight/pulse entirely and the Next Street button pulses instead. Reset to
+    /// false by every record/tap/rewind/advance/deal via `recomputeDerivedState` + `resetHandState`.
+    @State private var streetClosedDecisively: Bool = false
+
     // Card state
     @State private var heroCards: [CardSlot]  = [CardSlot(), CardSlot()]
     @State private var flopCards: [CardSlot]  = [CardSlot(), CardSlot(), CardSlot()]
@@ -48,12 +54,7 @@ struct HandEntryView: View {
     @State private var activeSlot: SlotID? = nil
     @State private var pickingRank: String? = nil
 
-    // Showdown state
-    @State private var villainCardEntryEnabled: Bool = false
-    @State private var villainShowdownCards: [Int: [CardSlot]] = [:]
-    @State private var activeVillainSeat: Int? = nil
-    @State private var activeVillainCardIndex: Int = 0
-    @State private var villainPickingRank: String? = nil
+    // Hand-close state
     @State private var handCloseSummary: String = ""
 
     @State private var phase: Phase = .selectSeat
@@ -71,7 +72,7 @@ struct HandEntryView: View {
     private var openBetExists: Bool { betLevelThisStreet > 0 }
 
     private var feltActionText: String? {
-        guard phase == .recordingHand, let seat = highlightedSeat else { return nil }
+        guard phase == .recordingHand, !streetClosedDecisively, let seat = highlightedSeat else { return nil }
         let pos = seatPositions[seat] ?? "?"
         return "Action on \(pos)"
     }
@@ -80,6 +81,7 @@ struct HandEntryView: View {
         switch phase {
         case .selectSeat:    return "TAKE\nYOUR SEAT"
         case .placingButton: return "PLACE\nTHE BUTTON"
+        case .handClosed:    return "TAP A SEAT\nTO DEAL"
         default:             return nil
         }
     }
@@ -131,95 +133,36 @@ struct HandEntryView: View {
 
     // MARK: - Rewind Button (top-left of table)
 
-    /// Live whenever any action exists to peel back — on this street or an earlier one.
+    /// Live whenever there is something to undo: an action on this/earlier street, or a closed
+    /// hand to re-open (showdown overlay or hand-closed state are both reversible).
     private var rewindButtonEnabled: Bool {
-        !actionsThisStreet.isEmpty || !streets.isEmpty
+        phase == .showdown || phase == .handClosed
+            || !actionsThisStreet.isEmpty || !streets.isEmpty
     }
 
-    private var rewindButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() }
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 9, weight: .bold))
-                Text("Rewind")
-                    .font(.custom("Arial", size: 11))
-                    .fontWeight(.bold)
-                    .tracking(0.5)
-            }
-            .foregroundStyle(rewindButtonEnabled ? Color.gold : Color.textMuted.opacity(0.5))
-            .padding(.horizontal, 11)
-            .padding(.vertical, 7)
-            .background {
-                Capsule().fill(Color.surface2)
-            }
-            .overlay(
-                Capsule().stroke(
-                    rewindButtonEnabled ? Color.gold.opacity(0.5) : Color.borderDark.opacity(0.5),
-                    lineWidth: 1
-                )
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(!rewindButtonEnabled)
-        .opacity(rewindButtonEnabled ? 1.0 : 0.55)
-    }
+    // MARK: - Next Street action (top-right of control row)
 
-    // MARK: - Next Street Button (top-right of table)
-
-    private var nextStreetButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                if pendingFoldOut {
-                    triggerFoldOut()
-                    return
-                }
-                if !streetIsClosed() {
-                    // Preflop fast-forward: auto-fold all unacted active seats.
-                    let actedSeats = Set(actionsThisStreet.map { $0.seatIndex })
-                    let unacted = activeSeatSequence.filter { !actedSeats.contains($0) }
-                    let didFoldOut = autoFoldSeats(unacted, autoFolded: true)
-                    guard !didFoldOut else { return }
-                }
-                advanceStreetOrShowdown()
+    /// The Next-Street / End-Hand button's action: commit a pending fold-out, run the preflop
+    /// fast-forward (auto-fold unacted seats), then advance the street or open the showdown. This
+    /// is the ONLY path that advances a street — taps, swipes, and action buttons never do.
+    private func handleNextStreet() {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            // Advancing leaves the decisive-close state. Required for the river→showdown path, which
+            // sets phase without a recompute and would otherwise leak the flag into showdown.
+            streetClosedDecisively = false
+            if pendingFoldOut {
+                triggerFoldOut()
+                return
             }
-        } label: {
-            HStack(spacing: 3) {
-                Text(nextStreetLabel)
-                    .font(.custom("Arial", size: 11))
-                    .fontWeight(.bold)
-                    .tracking(0.5)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 9, weight: .bold))
+            if !streetIsClosed() {
+                // Preflop fast-forward: auto-fold all unacted active seats.
+                let actedSeats = Set(actionsThisStreet.map { $0.seatIndex })
+                let unacted = activeSeatSequence.filter { !actedSeats.contains($0) }
+                let didFoldOut = autoFoldSeats(unacted, autoFolded: true)
+                guard !didFoldOut else { return }
             }
-            .foregroundStyle(nextStreetButtonEnabled ? Color(hex: "#0D0D0D") : Color.textMuted.opacity(0.5))
-            .padding(.horizontal, 11)
-            .padding(.vertical, 7)
-            .background {
-                if nextStreetButtonEnabled {
-                    Capsule().fill(
-                        LinearGradient(
-                            colors: [Color.gold, Color(hex: "#9A6820")],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                } else {
-                    Capsule().fill(Color.surface2)
-                }
-            }
-            .overlay(
-                Capsule().stroke(
-                    nextStreetButtonEnabled ? Color.goldLight.opacity(0.6) : Color.borderDark.opacity(0.5),
-                    lineWidth: 1
-                )
-            )
-            .shadow(color: nextStreetButtonEnabled ? Color.gold.opacity(0.4) : .clear, radius: 6)
+            advanceStreetOrShowdown()
         }
-        .buttonStyle(.plain)
-        .disabled(!nextStreetButtonEnabled)
-        .opacity(nextStreetButtonEnabled ? 1.0 : 0.55)
     }
 
     // MARK: - Body
@@ -259,7 +202,10 @@ struct HandEntryView: View {
                     heroSeat: heroSeat,
                     buttonSeat: buttonSeat,
                     seatStates: seatActions,
-                    activeSeat: highlightedSeat,
+                    // On a decisive close the ring drops entirely (Option A) — the pulse hands off to
+                    // the Next Street button. The data pointer (`highlightedSeat`) stays intact for
+                    // tap/rewind logic; only the *visual* highlight is suppressed here.
+                    activeSeat: streetClosedDecisively ? nil : highlightedSeat,
                     positions: seatPositions,
                     onSeatTap: handleSeatTap,
                     onSeatSwipe: handleSeatSwipe,
@@ -303,17 +249,6 @@ struct HandEntryView: View {
                     .padding(.top, 6)
                 }
 
-                // ── Rewind + Next Street buttons ──────────────────────
-                if phase == .recordingHand {
-                    HStack {
-                        rewindButton
-                        Spacer()
-                        nextStreetButton
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                }
-
                 Divider()
                     .background(Color.borderDark)
                     .padding(.top, 8)
@@ -327,19 +262,21 @@ struct HandEntryView: View {
                 Spacer()
             }
         }
-        // ── Action Controller Bar ──────────────────────────────────────
+        // ── Unified control row (Rewind · actions · Next Street) ────────
         .safeAreaInset(edge: .bottom) {
             if phase == .recordingHand || phase == .showdown || phase == .handClosed {
-                ActionControllerBar(
+                ControlBar(
+                    isRecording: phase == .recordingHand,
                     currentStreet: currentStreet,
                     openBetExists: openBetExists,
                     highlightedSeat: highlightedSeat,
-                    canUndo: !actionsThisStreet.isEmpty || !streets.isEmpty,
-                    showNewHandCTA: phase == .showdown || phase == .handClosed,
+                    rewindEnabled: rewindButtonEnabled,
+                    nextStreetEnabled: nextStreetButtonEnabled,
+                    nextStreetPulsing: streetClosedDecisively,
+                    nextStreetLabel: nextStreetLabel,
                     onAction: { commitAction($0) },
-                    onForward: advanceToNextSeat,
-                    onBack: undoLastAction,
-                    onNewHand: startNewHand
+                    onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
+                    onNextStreet: handleNextStreet
                 )
             }
         }
@@ -427,16 +364,9 @@ struct HandEntryView: View {
             break
 
         case .handClosed:
-            guard villainCardEntryEnabled else { return }
-            guard seat != heroSeat else { return }
-            let isActiveAtShowdown = activeSeatSequence.contains(seat) || foldedSeats.contains(seat)
-            guard isActiveAtShowdown else { return }
-            activeVillainSeat = seat
-            activeVillainCardIndex = 0
-            villainPickingRank = nil
-            if villainShowdownCards[seat] == nil {
-                villainShowdownCards[seat] = [CardSlot(), CardSlot()]
-            }
+            // The hand is over — tapping any seat places the dealer button there and deals the
+            // next hand. Reuses the exact gesture used to place the button on hand #1.
+            withAnimation(.easeInOut(duration: 0.2)) { dealNextHand(buttonAt: seat) }
         }
     }
 
@@ -626,17 +556,12 @@ struct HandEntryView: View {
         finishSwipe(on: seat, action: action, sizing: sizing)
     }
 
-    /// Shared tail: record the action on `seat`, handle fold-out, then keep the highlight ON the
-    /// seat that just acted — exactly like a tap-cycle. A swipe is "pick this action directly"
-    /// rather than "cycle to it"; it does NOT move the action to the next player. The user advances
-    /// by aiming the next gesture at the next seat (a tap/swipe there commits this seat's standing
-    /// action and lands the target, auto-folding/-checking anyone skipped — same as the tap model).
-    /// This avoids silently seeding an unintended action onto the next seat. Swipes never advance
-    /// the street either; only the Next Street button does (it lights when `streetIsClosed`).
+    /// Shared tail for swipes: record the action on `seat`, then settle (see `settleAfterCommit`).
+    /// A swipe picks the action directly instead of cycling to it, then advances the ring to the
+    /// next player WITHOUT seeding any action there — identical to an action-button press.
     private func finishSwipe(on seat: Int, action: ActionType, sizing: RaiseSizing? = nil) {
         recordAction(action, for: seat, sizing: sizing)
-        if action == .fold && activeSeatSequence.count == 1 { triggerFoldOut(); return }
-        highlightedSeat = seat
+        settleAfterCommit(on: seat, justFolded: action == .fold)
     }
 
     // MARK: - Seat Sizing (hold-to-size, Phase 2)
@@ -743,18 +668,47 @@ struct HandEntryView: View {
         recomputeDerivedState()
     }
 
-    /// The Action Controller Bar's committed action: record it for the seat on the clock, then —
-    /// because this is a final decision, not an editable tap — end the hand on a fold-out, or
-    /// advance the highlight and test for street close.
+    /// An action-button press: record it for the seat on the clock, then settle. Identical tail to a
+    /// swipe (`settleAfterCommit`) — the button just always targets the highlighted seat. Like the
+    /// swipe path, it supersedes a standing live action (e.g. a cycled Call) rather than stacking a
+    /// second action; a seat that owes a fresh response (never acted, or facing new aggression) keeps
+    /// its earlier action as a genuine prior.
     private func commitAction(_ type: ActionType) {
         guard let seat = highlightedSeat else { return }
-        recordAction(type, for: seat)
-        if type == .fold && activeSeatSequence.count == 1 {
-            triggerFoldOut()
+        // Wrapped in withAnimation to match the swipe path — gives the highlight transition a finite
+        // animation transaction (smooth ring move; also belt-and-suspenders for the pulse cancel).
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if hasActed(seat) && !owesAction(seat) { removeLastAction(of: seat) }
+            recordAction(type, for: seat)
+            settleAfterCommit(on: seat, justFolded: type == .fold)
+        }
+    }
+
+    /// Shared post-record settle for COMMITTED inputs (action buttons + swipes). Ends the hand on a
+    /// fold-out; otherwise either holds on the acting seat and lets the Next-Street button light
+    /// (street closed), or advances the ring to the next actor WITHOUT seeding any action there.
+    /// This is the single source of truth that keeps buttons and swipes behaviorally identical.
+    private func settleAfterCommit(on seat: Int, justFolded: Bool) {
+        if justFolded && activeSeatSequence.count == 1 { triggerFoldOut(); return }
+        highlightedSeat = seat
+        guard !streetIsClosed() else {
+            // Decisive close: the round is complete via a committed input. Hand the pulse off to the
+            // Next Street button — the acted seat drops its highlight. (Taps never reach here.)
+            streetClosedDecisively = true
             return
         }
-        advanceHighlight()
-        checkStreetClose()
+        if let next = nextActiveSeat(after: seat) {
+            highlightedSeat = next                 // advance the ring only — no recordAction (no seed)
+        }
+    }
+
+    /// Next active seat clockwise from `seat` — the next player to act in linear order. Single source
+    /// of truth for ring advancement (used by both committed-input settling). Anchored on the FULL
+    /// table ring so it is correct even when `seat` has just folded out of `activeSeatSequence` (a
+    /// just-folded seat is no longer in the active subset, so we cannot rotate from it there).
+    private func nextActiveSeat(after seat: Int) -> Int? {
+        let ring = clockwiseOrder(from: seat, seats: Array(0..<tableSize))
+        return ring.dropFirst().first { activeSeatSequence.contains($0) }
     }
 
     private func triggerFoldOut() {
@@ -762,7 +716,6 @@ struct HandEntryView: View {
             handCloseSummary = (winner == heroSeat) ? "You win" : "Seat \(winner + 1) wins"
         }
         saveCurrentHand(outcome: nil)
-        villainCardEntryEnabled = false
         phase = .handClosed
         highlightedSeat = nil
     }
@@ -774,7 +727,6 @@ struct HandEntryView: View {
         case .chop: handCloseSummary = "Chop"
         }
         saveCurrentHand(outcome: outcome)
-        villainCardEntryEnabled = true
         phase = .handClosed
         highlightedSeat = nil
     }
@@ -831,6 +783,30 @@ struct HandEntryView: View {
     /// jump returns to "first to act", not the seat that was tapped. Card slots are left
     /// untouched — rewind only affects recorded action.
     private func undoLastAction() {
+        // A finished hand is reversible. Un-close it first, discriminating by the saved hand's
+        // outcome (showdown saves a non-nil outcome; a fold-out saves nil).
+        if phase == .handClosed {
+            let popped = savedHands.popLast()
+            handCloseSummary = ""
+            if popped?.outcome != nil {
+                phase = .showdown        // re-open the Win/Lose/Chop overlay to re-pick — no peel
+                highlightedSeat = nil
+                return
+            }
+            phase = .recordingHand       // fold-out → re-open recording, then peel the fold below
+        } else if phase == .showdown {
+            phase = .recordingHand       // unresolved showdown → back to the river, peel below
+        }
+
+        // A decisive close moved the cue to the Next Street button without adding a log entry. The
+        // first Rewind reverses THAT step — return the pulse to the last actor (already the held
+        // seat) without deleting; a further press then undoes that actor's action. Same principle as
+        // the ahead-ring re-home below, for the other representation of "cue ahead of the log".
+        if streetClosedDecisively {
+            streetClosedDecisively = false
+            return
+        }
+
         // Nothing on this street yet — step back into the previous street and land the highlight on
         // its last actor (kept, re-armed for cycling). The action itself stays; a further press
         // then undoes within that street. This is what makes Rewind cross a boundary cleanly:
@@ -841,6 +817,18 @@ struct HandEntryView: View {
             actionsThisStreet = prev.actions
             recomputeDerivedState()
             highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
+            return
+        }
+
+        // Re-home an "ahead" ring first. After an advance-no-seed (action button or swipe) the
+        // highlight sits on an empty seat one step ahead of the log's last entry. The first Rewind
+        // returns the ring to the last actor (showing their action) WITHOUT deleting — visually
+        // identical to undoing a tap, whose landing seat carried an action. A further press then
+        // undoes that action. Recording is two kinds of step (a bare advance, and an action); Rewind
+        // peels the advance before the action.
+        if let hs = highlightedSeat, !hasActed(hs),
+           let lastActor = actionsThisStreet.last?.seatIndex, lastActor != hs {
+            highlightedSeat = lastActor
             return
         }
 
@@ -862,6 +850,9 @@ struct HandEntryView: View {
     /// logs after a structural edit. Folds are gathered from ALL streets plus the current one so a
     /// fold recorded on an earlier street stays in effect.
     private func recomputeDerivedState() {
+        // Any structural edit returns the ring to a live decision; only settleAfterCommit's decisive
+        // close re-sets this (it runs after the recordAction that lands here).
+        streetClosedDecisively = false
         let allActions = streets.flatMap { $0.actions } + actionsThisStreet
         foldedSeats = Set(allActions.filter { $0.actionType == .fold }.map { $0.seatIndex })
         activeSeatSequence = Array(0..<tableSize).filter { !foldedSeats.contains($0) }.sorted()
@@ -924,12 +915,6 @@ struct HandEntryView: View {
         } else {
             closeStreet()
         }
-    }
-
-    /// Used by the Action Controller Bar (committed actions): close immediately if done.
-    private func checkStreetClose() {
-        guard streetIsClosed() else { return }
-        advanceStreetOrShowdown()
     }
 
     // Returns the BB's seat index based on the full table layout (position-stable across folds).
@@ -1012,35 +997,6 @@ struct HandEntryView: View {
             return true
         }
         return false
-    }
-
-    private func advanceHighlight() {
-        guard let current = highlightedSeat else {
-            highlightedSeat = activeSeatSequence.first
-            return
-        }
-        guard activeSeatSequence.contains(current) else {
-            // Seat was just folded; find the next active seat clockwise from it
-            let allFromCurrent = clockwiseOrder(from: current, seats: Array(0..<tableSize))
-            highlightedSeat = allFromCurrent.dropFirst().first { activeSeatSequence.contains($0) }
-            return
-        }
-        let ordered = clockwiseOrder(from: current, seats: activeSeatSequence)
-        highlightedSeat = ordered.count > 1 ? ordered[1] : nil
-    }
-
-    private func advanceToNextSeat() {
-        guard let current = highlightedSeat else { return }
-        let allActive = clockwiseOrder(from: current, seats: activeSeatSequence)
-        guard allActive.count > 1 else { return }
-        let next = allActive[1]
-        // Fold the current seat (skipped) unless it already acted, plus anyone skipped between.
-        var toFold: [Int] = []
-        if !hasActed(current) { toFold.append(current) }
-        toFold += seatsStrictlyBetween(from: current, to: next, in: activeSeatSequence)
-        if autoFoldSeats(toFold) { return }
-        highlightedSeat = next
-        checkStreetClose()
     }
 
     // MARK: - Helpers
@@ -1383,7 +1339,9 @@ struct HandEntryView: View {
 
     // MARK: - Hand Lifecycle
 
-    private func resetHand() {
+    /// Clears all per-hand state (actions, streets, cards) while preserving the session-locked hero
+    /// seat and table size. Does NOT set `phase` — the caller decides the next phase.
+    private func resetHandState() {
         seatActions = [:]
         buttonSeat = nil
         heroCards  = [CardSlot(), CardSlot()]
@@ -1399,12 +1357,8 @@ struct HandEntryView: View {
         activeSeatSequence = []
         foldedSeats = []
         highlightedSeat = nil
-        villainCardEntryEnabled = false
-        villainShowdownCards = [:]
-        activeVillainSeat = nil
-        villainPickingRank = nil
         handCloseSummary = ""
-        phase = .placingButton
+        streetClosedDecisively = false
     }
 
     private func saveCurrentHand(outcome: Outcome?) {
@@ -1430,31 +1384,38 @@ struct HandEntryView: View {
         savedHands.append(hand)
     }
 
-    private func startNewHand() {
-        let prevButton = buttonSeat ?? 0
-        if phase == .showdown {
-            saveCurrentHand(outcome: nil)
-        }
+    /// Deals the next hand from the hand-closed state: place the dealer button on the tapped seat,
+    /// reset per-hand state, highlight the first actor, and start recording. The hand that just
+    /// finished was already saved at close, so nothing is persisted here.
+    private func dealNextHand(buttonAt seat: Int) {
         handNumber += 1
-        resetHand()
-        let allSeats = (0..<tableSize).map { $0 }
-        let ordered = clockwiseOrder(from: prevButton, seats: allSeats)
-        highlightedSeat = ordered.count > 1 ? ordered[1] : ordered[0]
+        resetHandState()
+        buttonSeat = seat
+        activeSeatSequence = Array(0..<tableSize)
+        highlightedSeat = firstActor(of: .preflop)
+        phase = .recordingHand
     }
 }
 
-// MARK: - Action Controller Bar
+// MARK: - Control Bar (single bottom row: Rewind · actions · Next Street)
 
-private struct ActionControllerBar: View {
+/// The one home for all recording controls. Morphs by phase:
+/// - recording:  [ Rewind ]  [ Fold/Call/Raise · Check/Bet ]  [ Flop › ]
+/// - showdown / hand-closed:  [ Rewind ]  (the table overlay / "tap a seat to deal" drives the rest)
+private struct ControlBar: View {
+    let isRecording: Bool
     let currentStreet: StreetName
     let openBetExists: Bool
     let highlightedSeat: Int?
-    let canUndo: Bool
-    let showNewHandCTA: Bool
+    let rewindEnabled: Bool
+    let nextStreetEnabled: Bool
+    let nextStreetPulsing: Bool
+    let nextStreetLabel: String
     let onAction: (ActionType) -> Void
-    let onForward: () -> Void
-    let onBack: () -> Void
-    let onNewHand: () -> Void
+    let onRewind: () -> Void
+    let onNextStreet: () -> Void
+
+    @State private var nextStreetPulse: CGFloat = 1.0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1462,78 +1423,104 @@ private struct ActionControllerBar: View {
                 .fill(Color.borderDark)
                 .frame(height: 1)
 
-            if showNewHandCTA {
-                newHandButton
-            } else {
-                actionRow
+            HStack(spacing: 0) {
+                rewindButton
+                Spacer()
+                if isRecording {
+                    actionButtons
+                    Spacer()
+                    nextStreetButton
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
         }
         .background(Color.surface)
     }
 
-    private var newHandButton: some View {
-        Button(action: onNewHand) {
-            Text("New Hand →")
-                .font(.custom("Arial", size: 16))
-                .fontWeight(.bold)
-                .foregroundStyle(Color(hex: "#0D0D0D"))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(
-                    LinearGradient(
-                        colors: [Color.gold, Color(hex: "#9A6820")],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+    // MARK: Rewind (left)
+
+    private var rewindButton: some View {
+        Button(action: onRewind) {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 9, weight: .bold))
+                Text("Rewind")
+                    .font(.custom("Arial", size: 11))
+                    .fontWeight(.bold)
+                    .tracking(0.5)
+            }
+            .foregroundStyle(rewindEnabled ? Color.gold : Color.textMuted.opacity(0.5))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 11)
+            .background(Capsule().fill(Color.surface2))
+            .overlay(
+                Capsule().stroke(
+                    rewindEnabled ? Color.gold.opacity(0.5) : Color.borderDark.opacity(0.5),
+                    lineWidth: 1
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+            )
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .disabled(!rewindEnabled)
+        .opacity(rewindEnabled ? 1.0 : 0.55)
     }
 
-    private var actionRow: some View {
-        HStack(spacing: 0) {
-            // Back arrow
-            Button(action: onBack) {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(canUndo ? Color.gold : Color.textMuted.opacity(0.35))
-                    .frame(width: 48, height: 44)
-                    .background(Color.surface2)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(canUndo ? Color.gold.opacity(0.3) : Color.borderDark.opacity(0.4), lineWidth: 1)
-                    )
+    // MARK: Next Street / End Hand (right)
+
+    private var nextStreetButton: some View {
+        Button(action: onNextStreet) {
+            HStack(spacing: 3) {
+                Text(nextStreetLabel)
+                    .font(.custom("Arial", size: 11))
+                    .fontWeight(.bold)
+                    .tracking(0.5)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 9, weight: .bold))
             }
-            .buttonStyle(.plain)
-            .disabled(!canUndo)
-
-            Spacer()
-
-            // Context-aware action buttons
-            actionButtons
-
-            Spacer()
-
-            // Forward arrow — preflop only
-            if currentStreet == .preflop {
-                Button(action: onForward) {
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(Color.gold)
-                        .frame(width: 48, height: 44)
+            .foregroundStyle(nextStreetEnabled ? Color(hex: "#0D0D0D") : Color.textMuted.opacity(0.5))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 11)
+            .background {
+                if nextStreetEnabled {
+                    Capsule().fill(
+                        LinearGradient(
+                            colors: [Color.gold, Color(hex: "#9A6820")],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                } else {
+                    Capsule().fill(Color.surface2)
                 }
-                .buttonStyle(.plain)
+            }
+            .overlay(
+                Capsule().stroke(
+                    nextStreetEnabled ? Color.goldLight.opacity(0.6) : Color.borderDark.opacity(0.5),
+                    lineWidth: 1
+                )
+            )
+            .shadow(color: nextStreetPulsing ? Color.gold.opacity(0.55) : (nextStreetEnabled ? Color.gold.opacity(0.4) : .clear),
+                    radius: nextStreetPulsing ? 12 : 6)
+        }
+        .buttonStyle(.plain)
+        .disabled(!nextStreetEnabled)
+        .opacity(nextStreetEnabled ? 1.0 : 0.55)
+        // Pulses only on a decisive street close — the cue hands off here from the seat ring.
+        .scaleEffect(nextStreetPulsing ? nextStreetPulse : 1.0)
+        .onChange(of: nextStreetPulsing) { _, pulsing in
+            if pulsing {
+                nextStreetPulse = 1.0
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    nextStreetPulse = 1.06
+                }
             } else {
-                Color.clear.frame(width: 48, height: 44)
+                withAnimation(.easeInOut(duration: 0.2)) { nextStreetPulse = 1.0 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
     }
+
+    // MARK: Context-aware action buttons (middle)
 
     @ViewBuilder
     private var actionButtons: some View {
