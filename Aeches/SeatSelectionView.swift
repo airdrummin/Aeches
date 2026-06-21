@@ -43,6 +43,8 @@ struct TableOvalView: View {
     var onSeatSize: (Int, String) -> Void = { _, _ in }
     var instruction: String? = nil
     var actionText: String? = nil
+    var minHeight: CGFloat = 300   // default = the original fixed 300; the Record screen passes a
+    var maxHeight: CGFloat = 300   // flexible range so the felt fills the slack / eases when needed.
 
     // One unified gesture per seat classifies tap / swipe / hold-to-size — no competing gestures.
     @State private var touchSeat: Int? = nil        // seat under the active touch
@@ -343,7 +345,7 @@ struct TableOvalView: View {
             }
             .frame(width: w, height: h)
         }
-        .frame(height: 300)
+        .frame(minHeight: minHeight, maxHeight: maxHeight)
         .animation(.easeInOut(duration: 0.2), value: tableSize)
         .animation(.easeInOut(duration: 0.35), value: instruction)
     }

@@ -59,6 +59,9 @@ struct HandEntryView: View {
     @State private var focusIndex: Int = 0
     @State private var entryLocked: Bool = false
 
+    // The bottom transcript: a 1-line sliver pinned at the bottom that expands up into the full hand.
+    @State private var transcriptExpanded: Bool = false
+
     // Hand-close state
     @State private var handCloseSummary: String = ""
 
@@ -75,6 +78,13 @@ struct HandEntryView: View {
     // MARK: - Computed Properties
 
     private var openBetExists: Bool { betLevelThisStreet > 0 }
+
+    /// The phases that use the play layout — a fixed-size table over the bottom assembly (strip ·
+    /// action/picker zone · transcript). Button placement is included so it matches recording (no big
+    /// standalone table / void); only seat-select keeps the standalone table + size picker.
+    private var isPlayingPhase: Bool {
+        phase == .placingButton || phase == .recordingHand || phase == .showdown || phase == .handClosed
+    }
 
     private var feltActionText: String? {
         guard phase == .recordingHand, !streetClosedDecisively, let seat = highlightedSeat else { return nil }
@@ -219,7 +229,13 @@ struct HandEntryView: View {
                     sizingStrip: sizingStrip(for:),
                     onSeatSize: handleSeatSize,
                     instruction: tableInstruction,
-                    actionText: feltActionText
+                    actionText: feltActionText,
+                    // A fixed, moderate felt for the whole hand (button placement → showdown) — the
+                    // compact size, never the blown-up round oval. The transcript below is the flexible
+                    // element that fills the remaining slack, so there is no mid-screen void. Seat-select
+                    // keeps the standalone 300 table.
+                    minHeight: isPlayingPhase ? 250 : 300,
+                    maxHeight: isPlayingPhase ? 250 : 300
                 )
                 .overlay {
                     if phase == .showdown {
@@ -260,49 +276,54 @@ struct HandEntryView: View {
                     .background(Color.borderDark)
                     .padding(.top, 8)
 
-                // ── Bottom half — Card strip ───────────────────────────
-                if phase == .recordingHand || phase == .showdown || phase == .handClosed {
+                // ── Bottom half — card strip + shared action/picker zone ──────
+                // The table sits directly above this zone. The card picker REPLACES the action
+                // buttons while a card group is open (Option 3) — it never covers the transcript
+                // sliver, which Phase 2 adds below this zone.
+                if isPlayingPhase {
                     cardStrip
                         .padding(.top, 10)
-                }
 
-                // ── Gap zone — the shorthand transcript by default, or the card picker while a card
-                // group is open. The strip slots stay visible above either way; the two never show
-                // at once (you're either reading the line or entering a card).
-                if entryStreet != nil {
-                    Spacer(minLength: 0)
-                    cardPickerPanel
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    if (phase == .recordingHand || phase == .showdown || phase == .handClosed),
-                       !handShorthand.isEmpty {
-                        transcriptPanel
-                            .padding(.top, 12)
+                    if entryStreet != nil {
+                        cardPickerPanel
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        ControlBar(
+                            isRecording: phase == .recordingHand,
+                            currentStreet: currentStreet,
+                            openBetExists: openBetExists,
+                            highlightedSeat: highlightedSeat,
+                            rewindEnabled: rewindButtonEnabled,
+                            nextStreetEnabled: nextStreetButtonEnabled,
+                            nextStreetPulsing: streetClosedDecisively,
+                            nextStreetLabel: nextStreetLabel,
+                            onAction: { commitAction($0) },
+                            onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
+                            onNextStreet: handleNextStreet
+                        )
                     }
+
+                    transcriptInline
+                } else {
                     Spacer(minLength: 0)
                 }
             }
-        }
-        // ── Unified control row (Rewind · actions · Next Street) ────────
-        .safeAreaInset(edge: .bottom) {
-            if phase == .recordingHand || phase == .showdown || phase == .handClosed {
-                ControlBar(
-                    isRecording: phase == .recordingHand,
-                    currentStreet: currentStreet,
-                    openBetExists: openBetExists,
-                    highlightedSeat: highlightedSeat,
-                    rewindEnabled: rewindButtonEnabled,
-                    nextStreetEnabled: nextStreetButtonEnabled,
-                    nextStreetPulsing: streetClosedDecisively,
-                    nextStreetLabel: nextStreetLabel,
-                    onAction: { commitAction($0) },
-                    onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
-                    onNextStreet: handleNextStreet
-                )
+
+            // ── Transcript drawer — slides up from the sliver to show the full hand. The dim
+            // backdrop (tap to collapse) sits behind it; the system tab bar stays on top.
+            if transcriptExpanded {
+                Color.black.opacity(0.55).ignoresSafeArea()
+                    .onTapGesture { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = false } }
+                VStack(spacing: 0) {
+                    Spacer(minLength: 120)
+                    transcriptDrawer
+                }
+                .transition(.move(edge: .bottom))
             }
         }
         .animation(.easeInOut(duration: 0.2), value: entryStreet != nil)
         .animation(.easeInOut(duration: 0.2), value: phase)
+        .animation(.easeInOut(duration: 0.25), value: transcriptExpanded)
     }
 
     // MARK: - Status Line
@@ -1161,20 +1182,17 @@ struct HandEntryView: View {
             )
 
             // Caption: the group's full shorthand in plain Courier text, shown once any suit info is
-            // entered (a bare ranks-only group prints nothing, so it doesn't echo the faces). The
-            // reserved height keeps the card faces baseline-aligned across all groups.
-            Group {
-                if g.mode != .none {
-                    Text(groupNotation(street))
-                        .font(.custom("Courier New", size: 13))
-                        .fontWeight(.bold)
-                        .tracking(1)
-                        .foregroundStyle(Color.goldLight)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
-            }
-            .frame(height: 20)
+            // entered. The line is ALWAYS rendered (a blank space when ranks-only) so the strip keeps
+            // a constant height — the picker never slides as you type the suits in. A bare ranks-only
+            // group prints a space, so it doesn't echo the faces.
+            Text(g.mode != .none ? groupNotation(street) : " ")
+                .font(.custom("Courier New", size: 13))
+                .fontWeight(.bold)
+                .tracking(1)
+                .foregroundStyle(Color.goldLight)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(height: 20)
         }
     }
 
@@ -1218,22 +1236,27 @@ struct HandEntryView: View {
                 // Slim grab handle — tap or swipe down to dismiss ("no more cards / stop here").
                 grabHandle
 
-                // Rank grid — 7, then a centered 6 that nests into the gaps above. The strip slots
-                // serve as the live preview (no separate notation readout).
+                // Rank grid — row 1 (the seven) full width; row 2 (the shorter six) flanked by Clear
+                // (trash, left) and Next (›, right), using that row's natural side-space so the suit
+                // cluster below gets a full-width row of its own. The six still nests into the gaps of
+                // the seven above (both rank rows stay centered).
                 VStack(spacing: 6) {
                     rankRow(["A","K","Q","J","T","9","8"])
-                    rankRow(["7","6","5","4","3","2"])
+                    HStack(spacing: 0) {
+                        iconButton("trash", tint: Color.foldRed) { clearEntryGroup() }
+                        Spacer(minLength: 8)
+                        rankRow(["7","6","5","4","3","2"])
+                        Spacer(minLength: 8)
+                        nextBankButton
+                    }
                 }
 
-                // Compact control row — Clear (trash) pinned left, the suit + shortcut cluster
-                // centered under the ranks, Next (›, advance) pinned right. Equal-width end controls
-                // keep the cluster centered via the matched Spacers.
+                // Suit + shortcut cluster — its own full-width centered row, uncramped even on the
+                // wide flop set (♠ ♥ ♦ ♣ x │ r m tt).
                 HStack(spacing: 0) {
-                    iconButton("trash", tint: Color.foldRed) { clearEntryGroup() }
-                    Spacer(minLength: 8)
+                    Spacer(minLength: 0)
                     suitCluster(for: street)
-                    Spacer(minLength: 8)
-                    nextBankButton
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -1272,9 +1295,9 @@ struct HandEntryView: View {
         let isRiver = entryStreet == .river
         return Button(action: advanceOrFinishEntry) {
             Image(systemName: isRiver ? "checkmark" : "chevron.right")
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(Color(hex: "#0D0D0D"))
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.gold))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.goldLight, lineWidth: 1))
         }
@@ -1313,36 +1336,88 @@ struct HandEntryView: View {
         }
     }
 
-    /// A 34×34 utility icon button (the picker's Clear/trash): a surface tile with a tint-colored
-    /// glyph and a matching subtle border.
+    /// A 30×30 utility icon button (the picker's Clear/trash): a surface tile with a tint-colored
+    /// glyph and a matching subtle border. Sized to match the suit squares.
     private func iconButton(_ systemName: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(tint)
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.4), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - Shorthand Transcript Panel
+    // MARK: - Bottom Transcript (inline tail + expand-up drawer)
 
-    /// Fills the gap below the strip (when the picker is closed): the live shorthand, Courier, with a
-    /// Copy button and auto-scroll to the newest line.
-    private var transcriptPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    /// The inline transcript at the bottom of the play layout: a header (tap the chevron to expand the
+    /// full hand up; Copy) over a scrollable tail of the running shorthand. It is the FLEXIBLE element
+    /// — it fills the slack below the fixed-size table (so a few lines show normally, more on tall
+    /// phones) and shrinks when the picker pushes up. The picker never covers it; it sits below the
+    /// action/picker zone in the stack.
+    private var transcriptInline: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button(action: { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = true } }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.up").font(.system(size: 10, weight: .bold))
+                        Text("HAND").font(.system(size: 10, weight: .bold)).tracking(1.5)
+                    }
+                    .foregroundStyle(Color.gold)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Button(action: copyShorthand) {
+                    Image(systemName: "doc.on.doc").font(.system(size: 12)).foregroundStyle(Color.gold)
+                }
+                .buttonStyle(.plain)
+                .disabled(handShorthand.isEmpty)
+                .opacity(handShorthand.isEmpty ? 0.35 : 1.0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 7)
+            .padding(.bottom, 4)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(handShorthand.isEmpty ? "No actions yet — record on the table or fill in cards." : handShorthand)
+                        .font(.custom("Courier New", size: 12))
+                        .foregroundStyle(handShorthand.isEmpty ? Color.textMuted : Color.textBody)
+                        .lineSpacing(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                    Color.clear.frame(height: 1).id("tailEnd")
+                }
+                .onChange(of: handShorthand) { _, _ in
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("tailEnd", anchor: .bottom) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.surface)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.borderDark.opacity(0.6)).frame(height: 1)
+        }
+    }
+
+    /// The expanded transcript drawer — the full multi-line hand in Courier, with Copy and a collapse
+    /// chevron. Presented as a bottom drawer from `body` (sized by the spacer above it there).
+    private var transcriptDrawer: some View {
+        VStack(spacing: 0) {
             HStack {
                 Text("HAND")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: 11, weight: .bold))
                     .tracking(2)
                     .foregroundStyle(Color.gold)
                 Spacer()
                 Button(action: copyShorthand) {
                     HStack(spacing: 4) {
-                        Image(systemName: "doc.on.doc").font(.system(size: 11))
-                        Text("Copy").font(.custom("Arial", size: 12))
+                        Image(systemName: "doc.on.doc").font(.system(size: 12))
+                        Text("Copy").font(.custom("Arial", size: 13))
                     }
                     .foregroundStyle(Color.textBody)
                     .padding(.horizontal, 10)
@@ -1350,30 +1425,38 @@ struct HandEntryView: View {
                     .overlay(Capsule().stroke(Color.borderDark, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                Button(action: { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = false } }) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Color.gold)
+                        .padding(.leading, 12)
+                }
+                .buttonStyle(.plain)
             }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+
+            Rectangle().fill(Color.borderDark).frame(height: 1)
 
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(handShorthand)
-                        .font(.custom("Courier New", size: 13))
+                        .font(.custom("Courier New", size: 14))
                         .foregroundStyle(Color.textBody)
-                        .lineSpacing(3)
+                        .lineSpacing(4)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
-                    Color.clear.frame(height: 1).id("transcriptEnd")
+                        .padding(18)
+                    Color.clear.frame(height: 1).id("drawerEnd")
                 }
-                .frame(height: 112)
-                .onChange(of: handShorthand) { _, _ in
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo("transcriptEnd", anchor: .bottom)
-                    }
-                }
+                .onAppear { proxy.scrollTo("drawerEnd", anchor: .bottom) }
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(hex: "#121212")))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(hex: "#2A2A2A"), lineWidth: 1))
-        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.surface)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.borderDark.opacity(0.6)).frame(height: 1)
+        }
     }
 
     private func copyShorthand() {
@@ -2023,7 +2106,7 @@ struct CardGroup: Equatable {
     }
 }
 
-// MARK: - Card Frame View (interim — Phase 2 redesigns this with faces + caption)
+// MARK: - Card Frame View — compact card face (rank + bound suit / "x"), thin for the strip band
 
 struct CardFrameView: View {
     let frame: CardFrame
@@ -2043,26 +2126,26 @@ struct CardFrameView: View {
 
             if frame.isEmpty {
                 Text("?")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.borderDark)
             } else {
-                VStack(spacing: 1) {
+                VStack(spacing: 0) {
                     Text(frame.rank ?? "")
                         .font(.system(size: 16, weight: .black))
                         .foregroundStyle(rankColor)
                     if showBoundSuit, let suit = frame.suit.knownSymbol {
                         Text(suit)
-                            .font(.system(size: 11))
+                            .font(.system(size: 9))
                             .foregroundStyle(suitColor)
                     } else if boundUnknown {
                         Text("x")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(Color(hex: "#888888"))
                     }
                 }
             }
         }
-        .frame(width: 44, height: 60)
+        .frame(width: 40, height: 40)
     }
 
     // The rank takes the suit color only when a bound suit is shown; otherwise it stays neutral black
