@@ -37,24 +37,44 @@ Lowercase, appended to the rank: `s` spades, `h` hearts, `d` diamonds, `c` clubs
 **Unknown / unrecorded suit = `x`** (e.g. `Kx`). Suit is always optional, so `x` is legal anywhere a suit
 can go. Examples: `Ah` `Ks` `5x` `Td`.
 
+An `x` is **explicit when deliberately entered** — a card the player marked unknown on purpose always
+renders its `x`, even alone (`Jx`, `Qx`). A card simply *left unsuited* renders bare (`J`) **unless** a
+partner card in the group carries a real suit, in which case it is shown as `x` too (`AhKx`).
+
+### Bound vs footnote — a recording-time distinction
+Suit information attaches in one of two ways, captured at entry time:
+- **Bound:** a suit is assigned to a *specific* card (entered interleaved, rank-then-suit). `AdJx`
+  means "the Ace is the diamond, the Jack unknown."
+- **Footnote:** suits are an *unassigned* note on the group (entered ranks-first, then suits). `AJdx`
+  means "one of these two is a diamond, doesn't matter which." The footnote letters trail the ranks
+  and are **padded to the group size with `x`** (so a single recorded suit shows the rest as `x`).
+
+Both are legal house style; pick by how the hand was recorded.
+
 ### Hole cards (always a pair)
 Two cards, higher rank first:
-- **Both suits known:** `AhKh`, `AsKd`.
+- **Both suits known (bound):** `AhKh`, `AsKd`.
 - **Relationship only (suited/offsuit):** `AKs`, `AKo`, `T9s`.
-- **One suit known:** write it, `x` the other — `AsKx`.
+- **One suit known (bound):** write it, `x` the other — `AsKx`.
+- **Footnote (unassigned suits):** ranks, then suit letters padded to two with `x` — `AJdx`
+  (one diamond, one unspecified). One recorded suit only still pads: `AJd` is written `AJdx`.
 - **Neither suit:** bare ranks — `AK`, `T9`.
 - **Pocket pair:** `99`, `AA` (no `s`/`o`).
 
 ### Flop (three cards)
 Three rank+suit tokens, in entry order:
-- **Per-card suits known:** concatenate — `Qh5h3c`.
+- **Per-card suits known (bound):** concatenate — `Qh5h3c`.
 - **Rainbow (suits distinct, unspecified-which):** bare ranks + `r` — `Q53r`.
 - **Monotone (all same, unspecified-which):** bare ranks + `m` — `Q53m`. If the suit is known, write it:
   `QhJh4h`.
-- **Two-tone:** explicit per-card suits, no shortcut letter — `Qh5h3x` (two hearts, third unknown).
+- **Two-tone:** two ways. Abstract (suits unspecified) — bare ranks + `tt`, `Q53tt`. Explicit per-card —
+  `Qh5h3x` (two hearts, third unknown).
+- **Footnote (unassigned suits):** ranks, then suit letters padded to three with `x` — `Q53hhx`
+  (two hearts, one unspecified).
 
 ### Turn / River (one card each)
-A single rank+suit token: `Jh`, `5x`, `2c`.
+A single rank+suit token: `Jh`, `5x`, `2c`. (Single cards are bound-only — no footnote or
+relationship.)
 
 ---
 

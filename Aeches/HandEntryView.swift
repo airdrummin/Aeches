@@ -44,17 +44,20 @@ struct HandEntryView: View {
     /// false by every record/tap/rewind/advance/deal via `recomputeDerivedState` + `resetHandState`.
     @State private var streetClosedDecisively: Bool = false
 
-    // Card state
-    @State private var heroCards: [CardSlot]  = [CardSlot(), CardSlot()]
-    @State private var flopCards: [CardSlot]  = [CardSlot(), CardSlot(), CardSlot()]
-    @State private var turnCard:  CardSlot    = CardSlot()
-    @State private var riverCard: CardSlot    = CardSlot()
+    // Card state — one CardGroup per street (hole pair / flop / turn / river). Each group owns its
+    // frames plus a single suit mode (none / bound / footnote / relationship). See `CardGroup`.
+    @State private var holeGroup  = CardGroup(capacity: 2)
+    @State private var flopGroup  = CardGroup(capacity: 3)
+    @State private var turnGroup  = CardGroup(capacity: 1)
+    @State private var riverGroup = CardGroup(capacity: 1)
 
-    // Card picker state
-    // Card entry is per-street group (hole pair / flop / turn / river), not a single slot. `entryStreet`
-    // is the open group (nil = picker closed); `focusIndex` is the frame within it being edited.
+    // Card picker state. `entryStreet` is the open group (nil = picker closed); `focusIndex` is the
+    // cursor frame within it — the just-ranked frame that a following suit binds to in bound mode.
+    // `entryLocked` is set when a *completed* group is re-opened: its cards are display-only (suits and
+    // shortcuts disabled) until the user types a rank, which clears the group and unlocks fresh entry.
     @State private var entryStreet: CardStreet? = nil
     @State private var focusIndex: Int = 0
+    @State private var entryLocked: Bool = false
 
     // Hand-close state
     @State private var handCloseSummary: String = ""
@@ -1095,10 +1098,13 @@ struct HandEntryView: View {
         }
     }
 
+    /// Hero hole cards for the saved Hand. Reads the bound per-frame suit only — footnote/relationship
+    /// modes collapse to per-card here (the accepted, deferred persistence limitation; the live
+    /// transcript via `groupNotation` is the faithful artifact while recording).
     private func buildHeroCards() -> [Card] {
-        heroCards.compactMap { slot in
-            guard let rankStr = slot.rank, let rank = Rank(rawValue: rankStr) else { return nil }
-            let suit = slot.suit.flatMap { Suit(rawValue: suitKey($0)) }
+        holeGroup.frames.compactMap { frame in
+            guard let rankStr = frame.rank, let rank = Rank(rawValue: rankStr) else { return nil }
+            let suit = frame.suit.knownSymbol.flatMap { Suit(rawValue: suitKey($0)) }
             return Card(rank: rank, suit: suit)
         }
     }
@@ -1107,98 +1113,154 @@ struct HandEntryView: View {
 
     private var cardStrip: some View {
         HStack(alignment: .top, spacing: 0) {
-            streetSection(label: "HOLE", isActive: entryStreet == .hole || currentStreet == .preflop) {
-                HStack(spacing: 4) {
-                    ForEach(0..<2, id: \.self) { i in
-                        CardSlotView(slot: heroCards[i], isActive: entryStreet == .hole && focusIndex == i)
-                            .onTapGesture { openCardEntry(.hole, focus: i) }
-                    }
-                }
-            }
-
+            groupSection(label: "HOLE",  street: .hole,  isActive: entryStreet == .hole)
             Spacer()
-
-            streetSection(label: "FLOP", isActive: entryStreet == .flop || currentStreet == .flop) {
-                HStack(spacing: 4) {
-                    ForEach(0..<3, id: \.self) { i in
-                        CardSlotView(slot: flopCards[i], isActive: entryStreet == .flop && focusIndex == i)
-                            .onTapGesture { openCardEntry(.flop, focus: i) }
-                    }
-                }
-            }
-
+            groupSection(label: "FLOP",  street: .flop,  isActive: entryStreet == .flop)
             Spacer()
-
-            streetSection(label: "TURN", isActive: entryStreet == .turn || currentStreet == .turn) {
-                CardSlotView(slot: turnCard, isActive: entryStreet == .turn)
-                    .onTapGesture { openCardEntry(.turn) }
-            }
-
+            groupSection(label: "TURN",  street: .turn,  isActive: entryStreet == .turn)
             Spacer()
-
-            streetSection(label: "RIVER", isActive: entryStreet == .river || currentStreet == .river) {
-                CardSlotView(slot: riverCard, isActive: entryStreet == .river)
-                    .onTapGesture { openCardEntry(.river) }
-            }
+            groupSection(label: "RIVER", street: .river, isActive: entryStreet == .river)
         }
         .padding(.horizontal, 12)
         .animation(.easeInOut(duration: 0.25), value: currentStreet)
     }
 
+    /// A street group: rank-forward card faces, with a caption hanging beneath the group. The caption
+    /// encodes the unassigned suit info — footnote letters (`dx`, `hhx`) or a relationship word
+    /// (`suited`, `two tone`). Bound mode shows its suits ON the faces and has no caption. The caption
+    /// row reserves a fixed height so the faces stay baseline-aligned across all four groups.
     @ViewBuilder
-    private func streetSection<Content: View>(
-        label: String,
-        isActive: Bool,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(spacing: 8) {
+    private func groupSection(label: String, street: CardStreet, isActive: Bool) -> some View {
+        let g = group(for: street)
+        let anyKnown = g.frames.contains { $0.suit.knownSymbol != nil }
+        VStack(spacing: 6) {
             Text(label)
                 .font(.system(size: 9, weight: .bold))
                 .tracking(1.5)
                 .foregroundStyle(isActive ? Color.gold : Color.textMuted)
 
-            content()
-                .padding(.horizontal, 6)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(isActive ? Color.gold.opacity(0.45) : Color.clear, lineWidth: 1.5)
-                )
+            HStack(spacing: 4) {
+                ForEach(g.frames.indices, id: \.self) { i in
+                    CardFrameView(
+                        frame: g.frames[i],
+                        showBoundSuit: g.mode == .bound,
+                        // Show the grey "x" for an explicit unknown, or for a blank card whose partner
+                        // already carries a real suit (the inferred AhKx case).
+                        boundUnknown: g.mode == .bound &&
+                            (g.frames[i].suit == .unknown || (g.frames[i].suit == .unspecified && anyKnown)),
+                        isActive: entryStreet == street && focusIndex == i
+                    )
+                    .onTapGesture { openCardEntry(street) }
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isActive ? Color.gold.opacity(0.45) : Color.clear, lineWidth: 1.5)
+            )
+
+            ZStack { groupCaption(for: g) }
+                .frame(height: 20)
         }
     }
 
-    private var cardSlotWidth: CGFloat { 44 }
+    /// The caption beneath a group: footnote letters (mono) or relationship word (Arial). Bound/none
+    /// render nothing — the reserved height in `groupSection` keeps the faces aligned.
+    @ViewBuilder
+    private func groupCaption(for g: CardGroup) -> some View {
+        switch g.mode {
+        case .footnote:     captionPill(paddedFootnote(g), mono: true)
+        case .relationship: captionPill(relationshipWord(g.relationship), mono: false)
+        case .none, .bound: EmptyView()
+        }
+    }
+
+    private func captionPill(_ text: String, mono: Bool) -> some View {
+        Text(text)
+            .font(mono ? .custom("Courier New", size: 13) : .custom("Arial", size: 11))
+            .fontWeight(.bold)
+            .tracking(mono ? 2 : 1)
+            .foregroundStyle(Color.goldLight)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color(hex: "#1C1810")))
+            .overlay(Capsule().stroke(Color.gold.opacity(0.35), lineWidth: 1))
+    }
+
+    /// The footnote letters padded to the group size with "x" (e.g. [d] → "dx", [h,h] → "hhx").
+    /// Shared with `groupNotation` so the caption and the transcript can't drift.
+    private func paddedFootnote(_ g: CardGroup) -> String {
+        var letters = g.footnote
+        while letters.count < g.capacity { letters.append("x") }
+        return letters.joined()
+    }
+
+    private func relationshipWord(_ value: String?) -> String {
+        switch value {
+        case "s":  return "suited"
+        case "o":  return "offsuit"
+        case "r":  return "rainbow"
+        case "m":  return "mono"
+        case "tt": return "two tone"
+        default:   return ""
+        }
+    }
 
     // MARK: - Card Picker Panel
+
+    // Mutually-exclusive gating. Suits (♠♥♦♣ x) are live once a rank exists, UNLESS the group is
+    // committed to a relationship. Relationship shortcuts (s/o, r/m/tt) are live only when all ranks
+    // are in AND no specific suit has been committed (mode none or relationship) — and never for a
+    // hole pair (no 88s; 88o is assumed, never written). So at "both ranks, nothing chosen" both sets
+    // are live; the first suit turns s/o off, the first s/o turns suits off.
+    private var entryGroup: CardGroup? { entryStreet.map { group(for: $0) } }
+
+    private var suitsActive: Bool {
+        guard !entryLocked, let g = entryGroup else { return false }
+        return g.hasAnyRank && g.mode != .relationship
+    }
+
+    private var relActive: Bool {
+        guard !entryLocked, let street = entryStreet, let g = entryGroup else { return false }
+        guard g.isFull, g.mode == .none || g.mode == .relationship else { return false }
+        // Hole pair → no suited/offsuit.
+        if street == .hole, let r0 = g.frames.first?.rank, let r1 = g.frames.last?.rank, r0 == r1 {
+            return false
+        }
+        return true
+    }
 
     // Docked below the strip (not a covering sheet). The strip slots are the frames — they stay
     // visible and highlight the focused one — so the picker shows only the controls, no duplicate cards.
     private var cardPickerPanel: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             if let street = entryStreet {
+                // Slim grab handle — tap or swipe down to dismiss ("no more cards / stop here").
+                grabHandle
+
                 // Rank grid — 7, then a centered 6 that nests into the gaps above. The strip slots
-                // serve as the live preview (no separate notation readout), so the picker is just
-                // the controls.
+                // serve as the live preview (no separate notation readout).
                 VStack(spacing: 6) {
                     rankRow(["A","K","Q","J","T","9","8"])
                     rankRow(["7","6","5","4","3","2"])
                 }
 
-                // Control row — Clear (trash) pinned left, the suit + shortcut cluster centered
-                // under the ranks, Done (checkmark) pinned right. The end icons are equal-width, so
-                // the matched Spacers keep the cluster truly centered regardless of either icon.
+                // Compact control row — Clear (trash) pinned left, the suit + shortcut cluster
+                // centered under the ranks, Next (›, advance) pinned right. Equal-width end controls
+                // keep the cluster centered via the matched Spacers.
                 HStack(spacing: 0) {
                     iconButton("trash", tint: Color.foldRed) { clearEntryGroup() }
                     Spacer(minLength: 8)
                     suitCluster(for: street)
                     Spacer(minLength: 8)
-                    iconButton("checkmark", tint: Color(hex: "#0D0D0D"), filled: true) { closeEntry() }
+                    nextBankButton
                 }
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
-        .padding(.top, 12)
+        .padding(.top, 8)
         .padding(.bottom, 14)
         .background(Color.surface)
         .overlay(alignment: .top) {
@@ -1206,19 +1268,52 @@ struct HandEntryView: View {
         }
     }
 
+    /// The dismiss affordance: a slim grabber bar at the top of the picker. Tap or swipe down to
+    /// close (reveals the transcript) — the "no more cards / stop here" action, on any bank.
+    private var grabHandle: some View {
+        Capsule()
+            .fill(Color.borderDark)
+            .frame(width: 40, height: 5)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { closeEntry() } }
+            .gesture(
+                DragGesture(minimumDistance: 10)
+                    .onEnded { v in
+                        if v.translation.height > 12 {
+                            withAnimation(.easeInOut(duration: 0.2)) { closeEntry() }
+                        }
+                    }
+            )
+    }
+
+    /// The advance control: a 34×34 gold tile, `›` to jump to the next bank (hole → flop → turn →
+    /// river), or `✓` on the river (no next bank) to dismiss.
+    private var nextBankButton: some View {
+        let isRiver = entryStreet == .river
+        return Button(action: advanceOrFinishEntry) {
+            Image(systemName: isRiver ? "checkmark" : "chevron.right")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color(hex: "#0D0D0D"))
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.gold))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.goldLight, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
     /// The centered control cluster: the four suits + "x" (unknown), and — for hole/flop — a
     /// divider followed by the relationship/texture shortcut squares (s/o or r/m). Turn and river
     /// have no shortcuts, so their cluster is just the five suit squares.
     @ViewBuilder
     private func suitCluster(for street: CardStreet) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             suitSquare("♠"); suitSquare("♥"); suitSquare("♦"); suitSquare("♣")
             unknownSuitSquare()
             if street == .hole || street == .flop {
                 Rectangle()
                     .fill(Color.borderDark)
-                    .frame(width: 1, height: 30)
-                    .padding(.horizontal, 1)
+                    .frame(width: 1, height: 28)
                 shortcutSquares(for: street)
             }
         }
@@ -1228,29 +1323,27 @@ struct HandEntryView: View {
     private func shortcutSquares(for street: CardStreet) -> some View {
         switch street {
         case .hole:
-            shortcutSquare("s") { relationshipTapped("s") }
-            shortcutSquare("o") { relationshipTapped("o") }
+            shortcutSquare("s")  { shortcutTapped("s") }
+            shortcutSquare("o")  { shortcutTapped("o") }
         case .flop:
-            shortcutSquare("r") { textureTapped("r") }
-            shortcutSquare("m") { textureTapped("m") }
+            shortcutSquare("r")  { shortcutTapped("r") }
+            shortcutSquare("m")  { shortcutTapped("m") }
+            shortcutSquare("tt") { shortcutTapped("tt") }
         case .turn, .river:
             EmptyView()
         }
     }
 
-    /// A 34×34 utility icon button (Clear / Done). `filled` = gold fill (Done); otherwise a surface
-    /// tile with the tint-colored border (Clear's destructive red).
-    private func iconButton(_ systemName: String, tint: Color, filled: Bool = false, action: @escaping () -> Void) -> some View {
+    /// A 34×34 utility icon button (the picker's Clear/trash): a surface tile with a tint-colored
+    /// glyph and a matching subtle border.
+    private func iconButton(_ systemName: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(tint)
                 .frame(width: 34, height: 34)
-                .background(RoundedRectangle(cornerRadius: 8).fill(filled ? Color.gold : Color.surface2))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(filled ? Color.goldLight : Color.foldRed.opacity(0.4), lineWidth: 1)
-                )
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.4), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -1326,46 +1419,54 @@ struct HandEntryView: View {
         }
     }
 
-    /// A 34×34 suit square. Hearts/diamonds render red; spades/clubs white.
+    /// A 30×30 suit square. Hearts/diamonds render red; spades/clubs white. Dimmed/disabled until the
+    /// open group has at least one rank and isn't committed to a relationship (`suitsActive`).
     private func suitSquare(_ suit: String) -> some View {
         Button(action: { suitTapped(suit) }) {
             Text(suit)
-                .font(.system(size: 18))
+                .font(.system(size: 17))
                 .foregroundStyle(["♥", "♦"].contains(suit) ? Color(hex: "#E74C3C") : Color.white)
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
                 .background(Color.surface2)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderDark, lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .disabled(!suitsActive)
+        .opacity(suitsActive ? 1.0 : 0.35)
     }
 
     /// The unknown-suit square — renders the shorthand marker "x" (e.g. Ax), suit left unrecorded.
     private func unknownSuitSquare() -> some View {
         Button(action: { suitTapped(nil) }) {
             Text("x")
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.textMuted)
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
                 .background(Color.surface2)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderDark, lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .disabled(!suitsActive)
+        .opacity(suitsActive ? 1.0 : 0.35)
     }
 
-    /// A 34×34 relationship/texture shortcut square (s/o for hole, r/m for flop).
+    /// A 30×30 relationship/texture shortcut square (s/o hole; r/m/tt flop). Dimmed/disabled until the
+    /// open group's ranks are all filled and no specific suit is committed (`relActive`).
     private func shortcutSquare(_ label: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: label.count > 1 ? 12 : 15, weight: .bold))
                 .foregroundStyle(Color.goldLight)
-                .frame(width: 34, height: 34)
+                .frame(width: 30, height: 30)
                 .background(Color.surface2)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gold.opacity(0.35), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .disabled(!relActive)
+        .opacity(relActive ? 1.0 : 0.35)
     }
 
     // MARK: - Card Entry (per-street group)
@@ -1382,78 +1483,131 @@ struct HandEntryView: View {
         }
     }
 
-    /// The live card slots for a group (turn/river wrap their single slot in an array).
-    private func groupCards(_ street: CardStreet) -> [CardSlot] {
+    /// The live group for a street.
+    private func group(for street: CardStreet) -> CardGroup {
         switch street {
-        case .hole:  return heroCards
-        case .flop:  return flopCards
-        case .turn:  return [turnCard]
-        case .river: return [riverCard]
+        case .hole:  return holeGroup
+        case .flop:  return flopGroup
+        case .turn:  return turnGroup
+        case .river: return riverGroup
         }
     }
 
-    private func setGroupCard(_ street: CardStreet, _ i: Int, _ card: CardSlot) {
+    private func setGroup(_ street: CardStreet, _ g: CardGroup) {
         switch street {
-        case .hole:  heroCards[i] = card
-        case .flop:  flopCards[i] = card
-        case .turn:  turnCard = card
-        case .river: riverCard = card
+        case .hole:  holeGroup  = g
+        case .flop:  flopGroup  = g
+        case .turn:  turnGroup  = g
+        case .river: riverGroup = g
         }
     }
 
-    private func openCardEntry(_ street: CardStreet, focus: Int? = nil) {
+    /// Opening a group focuses the left-most empty frame (or card 1 if full); entry is always
+    /// left-to-right, so the tapped slot index is ignored. Re-opening never mutates the cards — a
+    /// finished group is cleared only when you start typing a new rank (see `rankTapped`).
+    private func openCardEntry(_ street: CardStreet) {
         entryStreet = street
-        focusIndex = focus ?? (groupCards(street).firstIndex(where: { $0.isEmpty }) ?? 0)
+        let g = group(for: street)
+        entryLocked = g.isFull          // re-opening a finished group → display-only until a rank is typed
+        focusIndex = g.firstEmptyIndex ?? 0
     }
 
     private func closeEntry() {
-        entryStreet = nil
+        entryStreet = nil    // no mutation; any blank renders as "x" via notation
+    }
+
+    /// The bank that "Next" advances to, in deal order. Nil after the river (Next becomes Done).
+    private func nextCardStreet(after street: CardStreet) -> CardStreet? {
+        switch street {
+        case .hole:  return .flop
+        case .flop:  return .turn
+        case .turn:  return .river
+        case .river: return nil
+        }
+    }
+
+    /// "Next" / "Done": jump to the next bank for rapid sequential entry, or dismiss on the river.
+    /// Advancing never requires the current bank to be full — you can skip cards and tap back.
+    private func advanceOrFinishEntry() {
+        guard let street = entryStreet else { return }
+        if let next = nextCardStreet(after: street) {
+            withAnimation(.easeInOut(duration: 0.15)) { openCardEntry(next) }
+        } else {
+            closeEntry()
+        }
     }
 
     private func clearEntryGroup() {
         guard let street = entryStreet else { return }
-        for i in 0..<street.count { setGroupCard(street, i, CardSlot()) }
+        var g = group(for: street); g.reset(); setGroup(street, g)
         focusIndex = 0
     }
 
-    /// Tap a rank → fill the focused frame, then advance focus to the next frame still missing a rank
-    /// (or back to the first frame once the group is full, ready for suiting).
+    /// Tap a rank. A full group means you're starting a new hand, so it CLEARS and restarts with this
+    /// rank as the first card (no jarring in-place edit). Otherwise it fills the left-most empty frame
+    /// and parks the cursor there — the cursor is always "the card you just typed," so a following suit
+    /// binds to it.
     private func rankTapped(_ r: String) {
         guard let street = entryStreet else { return }
-        var card = groupCards(street)[focusIndex]
-        card.rank = r
-        card.qualifier = nil
-        setGroupCard(street, focusIndex, card)
-        focusIndex = groupCards(street).firstIndex(where: { $0.isEmpty }) ?? 0
+        entryLocked = false             // typing a rank begins fresh entry, releasing the re-open lock
+        var g = group(for: street)
+        if g.isFull {
+            g.reset()
+            g.frames[0].rank = r
+            focusIndex = 0
+        } else {
+            let i = g.firstEmptyIndex ?? 0
+            g.frames[i].rank = r
+            focusIndex = i
+        }
+        setGroup(street, g)
     }
 
-    /// Tap a suit (or "?" → nil) → set the focused frame's suit, then advance to the next frame.
-    private func suitTapped(_ suit: String?) {
+    /// Tap a suit (`♠♥♦♣`) or the unknown `x` (`symbol == nil`). The first suit of the group sets the
+    /// mode via the first-suit rule: an empty rank frame still open → bound (suit binds to the
+    /// just-ranked cursor card); all ranks in → footnote (append to the unassigned note).
+    private func suitTapped(_ symbol: String?) {
         guard let street = entryStreet else { return }
-        guard groupCards(street)[focusIndex].rank != nil else { return }   // nothing to suit yet
-        var card = groupCards(street)[focusIndex]
-        card.suit = suit
-        card.qualifier = nil
-        setGroupCard(street, focusIndex, card)
-        focusIndex = (focusIndex + 1) % street.count
+        var g = group(for: street)
+        // Gating disables suits in relationship mode and before any rank; this guard is belt-and-
+        // suspenders. The cursor stays put — a suit always binds to the card you're on, and the next
+        // rank (which clears a full group) is what starts a new hand.
+        guard g.hasAnyRank, g.mode != .relationship else { return }
+
+        if g.mode == .none {
+            // First-suit rule: an empty rank frame still open → bound; all ranks in → footnote.
+            // Single-frame groups (turn/river) are always bound — there is no "which card" ambiguity.
+            g.mode = (g.capacity == 1 || g.firstEmptyIndex != nil) ? .bound : .footnote
+        }
+
+        switch g.mode {
+        case .bound:
+            g.frames[focusIndex].suit = symbol.map(FrameSuit.known) ?? .unknown   // x → explicit unknown
+        case .footnote:
+            let letter = symbol.map(suitLetter) ?? "x"
+            if g.footnote.count < g.capacity {
+                g.footnote.append(letter)
+            } else {
+                g.footnote[g.footnoteCursor] = letter
+                g.footnoteCursor = (g.footnoteCursor + 1) % g.capacity
+            }
+        case .relationship, .none:
+            break
+        }
+        setGroup(street, g)
     }
 
-    /// Hole-only: suited / offsuit relationship — applies to both cards, clearing any explicit suits.
-    private func relationshipTapped(_ q: String) {
-        guard entryStreet == .hole else { return }
-        for i in 0..<2 where heroCards[i].rank != nil {
-            heroCards[i].suit = nil
-            heroCards[i].qualifier = q
-        }
-    }
-
-    /// Flop-only: rainbow ("r") / monotone ("m") texture — a group flag, no specific suits assigned.
-    private func textureTapped(_ t: String) {
-        guard entryStreet == .flop else { return }
-        for i in 0..<3 where flopCards[i].rank != nil {
-            flopCards[i].suit = nil
-            flopCards[i].qualifier = t
-        }
+    /// Tap a relationship/texture shortcut (`s`/`o` hole; `r`/`m`/`tt` flop). Sets relationship mode,
+    /// clearing any bound suits and footnote. Gated to a fully-ranked group.
+    private func shortcutTapped(_ value: String) {
+        guard let street = entryStreet else { return }
+        var g = group(for: street)
+        guard g.isFull else { return }   // gating belt-and-suspenders (the button is also dimmed)
+        g.mode = .relationship
+        g.relationship = value
+        g.footnote = []; g.footnoteCursor = 0
+        for i in g.frames.indices { g.frames[i].suit = .unspecified }
+        setGroup(street, g)
     }
 
     // MARK: - Card Notation (group readout — see ShorthandReference.md §2)
@@ -1465,33 +1619,35 @@ struct HandEntryView: View {
         }
     }
 
-    /// One card's token: rank + suit-letter, or rank + "x" when the suit is unknown but worth marking.
-    private func cardToken(_ c: CardSlot, markUnknown: Bool) -> String {
-        guard let r = c.rank else { return "" }
-        if let s = c.suit { return r + suitLetter(s) }
-        return markUnknown ? r + "x" : r
-    }
-
-    /// The group's shorthand for the picker readout: AJs / AsJx / Q53r / Qh5h3x / Jh / 5x.
+    /// The group's compact shorthand (see ShorthandReference.md §2), driven by its suit mode:
+    /// none `AJ` · bound `AdJx` · footnote `AJdx` (letters padded to N with `x`) · relationship
+    /// `AJs`/`Q53tt`. Single-frame groups (turn/river) are bound-only and never mark an unknown.
     private func groupNotation(_ street: CardStreet) -> String {
-        let cards = groupCards(street)
-        switch street {
-        case .hole:
-            if cards.count == 2, let r0 = cards[0].rank, let r1 = cards[1].rank,
-               let q = cards[0].qualifier, q == cards[1].qualifier {
-                return r0 + r1 + q                                  // AJs / AJo
-            }
-            let anySuit = cards.contains { $0.suit != nil }
-            return cards.map { cardToken($0, markUnknown: anySuit) }.joined()
-        case .flop:
-            if cards.allSatisfy({ $0.rank != nil }),
-               let t = cards[0].qualifier, cards.allSatisfy({ $0.qualifier == t }) {
-                return cards.compactMap { $0.rank }.joined() + t    // Q53r / Q53m
-            }
-            let anySuit = cards.contains { $0.suit != nil }
-            return cards.map { cardToken($0, markUnknown: anySuit) }.joined()
-        case .turn, .river:
-            return cards.map { cardToken($0, markUnknown: false) }.joined()
+        let g = group(for: street)
+        let ranks = g.frames.compactMap { $0.rank }
+        guard !ranks.isEmpty else { return "" }
+        let rankStr = ranks.joined()
+
+        switch g.mode {
+        case .none:
+            return rankStr                                       // AJ / Q53 / J
+        case .relationship:
+            return rankStr + (g.relationship ?? "")              // AJs / Q53r / Q53tt
+        case .footnote:
+            return rankStr + paddedFootnote(g)                   // AJ+[d] -> AJdx; Q53+[h,h] -> Q53hhx
+        case .bound:
+            // A blank card reads as "x" only when a partner carries a real suit (the inferred AhKx);
+            // an explicit unknown always reads as "x" (even alone — Jx, Qx).
+            let anyKnown = g.frames.contains { $0.suit.knownSymbol != nil }
+            let markUnknown = anyKnown && g.capacity > 1
+            return g.frames.compactMap { f -> String? in
+                guard let r = f.rank else { return nil }
+                switch f.suit {
+                case .known(let s): return r + suitLetter(s)
+                case .unknown:      return r + "x"
+                case .unspecified:  return markUnknown ? r + "x" : r
+                }
+            }.joined()                                           // AdJx / Qh5h3x / Jh / Jx
         }
     }
 
@@ -1595,12 +1751,13 @@ struct HandEntryView: View {
     /// seat and table size. Does NOT set `phase` — the caller decides the next phase.
     private func resetHandState() {
         buttonSeat = nil
-        heroCards  = [CardSlot(), CardSlot()]
-        flopCards  = [CardSlot(), CardSlot(), CardSlot()]
-        turnCard   = CardSlot()
-        riverCard  = CardSlot()
+        holeGroup  = CardGroup(capacity: 2)
+        flopGroup  = CardGroup(capacity: 3)
+        turnGroup  = CardGroup(capacity: 1)
+        riverGroup = CardGroup(capacity: 1)
         entryStreet = nil
         focusIndex  = 0
+        entryLocked = false
         currentStreet = .preflop
         streets = []
         actionsThisStreet = []
@@ -1839,60 +1996,89 @@ private struct ControlBar: View {
     }
 }
 
-// MARK: - Card Slot Model
+// MARK: - Card Group Model
 
-struct CardSlot: Equatable {
-    var rank:      String? = nil
-    var suit:      String? = nil   // "♠" "♥" "♦" "♣" or nil
-    var qualifier: String? = nil   // "s" or "o" (hole cards only)
+/// A bound card's suit as a three-state value, so an *explicit* unknown (`x`, deliberately entered)
+/// is distinct from a frame that simply hasn't been suited yet. Used only while the group is `.bound`.
+enum FrameSuit: Equatable {
+    case unspecified            // nothing entered yet (blank)
+    case unknown                // explicit "x" — always shows/reads as x, even alone (Jx, Qx)
+    case known(String)          // "♠" "♥" "♦" "♣"
 
-    var notation: String {
-        guard let r = rank else { return "" }
-        if let q = qualifier { return r + q }
-        if let s = suit { return r + suitKey(s) }
-        return r
-    }
+    /// The suit symbol when a real suit is set, else nil (both `.unspecified` and `.unknown`).
+    var knownSymbol: String? { if case .known(let s) = self { return s } else { return nil } }
+}
 
+/// One card frame: a rank, plus a bound suit that is only meaningful while the group is `.bound`.
+struct CardFrame: Equatable {
+    var rank: String? = nil          // "A","K",…,"2"
+    var suit: FrameSuit = .unspecified
     var isEmpty: Bool { rank == nil }
+}
 
-    private func suitKey(_ s: String) -> String {
-        switch s { case "♠": return "s"; case "♥": return "h"; case "♦": return "d"; case "♣": return "c"; default: return "" }
+/// A street's group of frames plus its single suit mode. Hole = 2 frames, flop = 3, turn/river = 1.
+/// The mode determines how suit info is stored and rendered (see `groupNotation`):
+/// - `.bound`        per-frame suit (interleaved entry) — `AdJx`
+/// - `.footnote`     an unassigned trailing note of suit letters — `AJdx`
+/// - `.relationship` an abstract relationship/texture from a shortcut button — `AJs` / `Q53tt`
+struct CardGroup: Equatable {
+    enum SuitMode: Equatable { case none, bound, footnote, relationship }
+
+    var frames: [CardFrame]
+    var mode: SuitMode = .none
+    var footnote: [String] = []      // ordered suit letters ("s/h/d/c" or "x"); used only in .footnote
+    var footnoteCursor: Int = 0      // wrap-replace pointer once the footnote is full
+    var relationship: String? = nil  // "s","o" (hole) | "r","m","tt" (flop); used only in .relationship
+
+    var capacity: Int { frames.count }
+    var ranksFilled: Int { frames.filter { $0.rank != nil }.count }
+    var isFull: Bool { ranksFilled == capacity }
+    var hasAnyRank: Bool { ranksFilled > 0 }
+    var firstEmptyIndex: Int? { frames.firstIndex(where: { $0.isEmpty }) }
+
+    init(capacity: Int) { self.frames = Array(repeating: CardFrame(), count: capacity) }
+
+    mutating func reset() {
+        frames = Array(repeating: CardFrame(), count: capacity)
+        mode = .none; footnote = []; footnoteCursor = 0; relationship = nil
     }
 }
 
-// MARK: - Card Slot View
+// MARK: - Card Frame View (interim — Phase 2 redesigns this with faces + caption)
 
-struct CardSlotView: View {
-    let slot: CardSlot
+struct CardFrameView: View {
+    let frame: CardFrame
+    var showBoundSuit: Bool = false   // true only in .bound mode — draws the suit pip on the face
+    var boundUnknown: Bool = false    // bound, suitless, but a partner card is suited → grey "x"
     let isActive: Bool
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(slot.isEmpty ? Color.surface2 : Color(hex: "#F5F0E8"))
+                .fill(frame.isEmpty ? Color.surface2 : Color(hex: "#F5F0E8"))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(isActive ? Color.gold : (slot.isEmpty ? Color.borderDark.opacity(0.5) : Color.clear), lineWidth: isActive ? 2 : 1)
+                        .stroke(isActive ? Color.gold : (frame.isEmpty ? Color.borderDark.opacity(0.5) : Color.clear), lineWidth: isActive ? 2 : 1)
                 )
                 .shadow(color: isActive ? Color.gold.opacity(0.4) : .clear, radius: 6)
 
-            if slot.isEmpty {
+            if frame.isEmpty {
                 Text("?")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(Color.borderDark)
             } else {
                 VStack(spacing: 1) {
-                    Text(slot.rank ?? "")
+                    Text(frame.rank ?? "")
                         .font(.system(size: 16, weight: .black))
-                        .foregroundStyle(suitColor)
-                    if let suit = slot.suit {
+                        .foregroundStyle(rankColor)
+                    if showBoundSuit, let suit = frame.suit.knownSymbol {
                         Text(suit)
                             .font(.system(size: 11))
                             .foregroundStyle(suitColor)
-                    } else if let q = slot.qualifier {
-                        Text(q)
+                    } else if boundUnknown {
+                        Text("x")
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(Color(hex: "#666666"))
+                            .foregroundStyle(Color(hex: "#888888"))
                     }
                 }
             }
@@ -1900,8 +2086,14 @@ struct CardSlotView: View {
         .frame(width: 44, height: 60)
     }
 
+    // The rank takes the suit color only when a bound suit is shown; otherwise it stays neutral black
+    // (footnote/relationship/none faces are rank-only, so coloring them by a suit would mislead).
+    private var rankColor: Color {
+        (showBoundSuit && frame.suit.knownSymbol != nil) ? suitColor : Color(hex: "#1A1A1A")
+    }
+
     private var suitColor: Color {
-        switch slot.suit {
+        switch frame.suit.knownSymbol {
         case "♥", "♦": return Color(hex: "#C0392B")
         default: return Color(hex: "#1A1A1A")
         }
