@@ -1160,51 +1160,30 @@ struct HandEntryView: View {
                     .stroke(isActive ? Color.gold.opacity(0.45) : Color.clear, lineWidth: 1.5)
             )
 
-            ZStack { groupCaption(for: g) }
-                .frame(height: 20)
+            // Caption: the group's full shorthand in plain Courier text, shown once any suit info is
+            // entered (a bare ranks-only group prints nothing, so it doesn't echo the faces). The
+            // reserved height keeps the card faces baseline-aligned across all groups.
+            Group {
+                if g.mode != .none {
+                    Text(groupNotation(street))
+                        .font(.custom("Courier New", size: 13))
+                        .fontWeight(.bold)
+                        .tracking(1)
+                        .foregroundStyle(Color.goldLight)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+            }
+            .frame(height: 20)
         }
-    }
-
-    /// The caption beneath a group: footnote letters (mono) or relationship word (Arial). Bound/none
-    /// render nothing — the reserved height in `groupSection` keeps the faces aligned.
-    @ViewBuilder
-    private func groupCaption(for g: CardGroup) -> some View {
-        switch g.mode {
-        case .footnote:     captionPill(paddedFootnote(g), mono: true)
-        case .relationship: captionPill(relationshipWord(g.relationship), mono: false)
-        case .none, .bound: EmptyView()
-        }
-    }
-
-    private func captionPill(_ text: String, mono: Bool) -> some View {
-        Text(text)
-            .font(mono ? .custom("Courier New", size: 13) : .custom("Arial", size: 11))
-            .fontWeight(.bold)
-            .tracking(mono ? 2 : 1)
-            .foregroundStyle(Color.goldLight)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(Color(hex: "#1C1810")))
-            .overlay(Capsule().stroke(Color.gold.opacity(0.35), lineWidth: 1))
     }
 
     /// The footnote letters padded to the group size with "x" (e.g. [d] → "dx", [h,h] → "hhx").
-    /// Shared with `groupNotation` so the caption and the transcript can't drift.
+    /// Used by `groupNotation` to render the footnote token.
     private func paddedFootnote(_ g: CardGroup) -> String {
         var letters = g.footnote
         while letters.count < g.capacity { letters.append("x") }
         return letters.joined()
-    }
-
-    private func relationshipWord(_ value: String?) -> String {
-        switch value {
-        case "s":  return "suited"
-        case "o":  return "offsuit"
-        case "r":  return "rainbow"
-        case "m":  return "mono"
-        case "tt": return "two tone"
-        default:   return ""
-        }
     }
 
     // MARK: - Card Picker Panel
