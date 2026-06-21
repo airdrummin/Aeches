@@ -1174,57 +1174,85 @@ struct HandEntryView: View {
     // Docked below the strip (not a covering sheet). The strip slots are the frames — they stay
     // visible and highlight the focused one — so the picker shows only the controls, no duplicate cards.
     private var cardPickerPanel: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 12) {
             if let street = entryStreet {
-                let notation = groupNotation(street)
-
-                // Header: Clear · live shorthand notation · Done
-                HStack {
-                    Button("Clear") { clearEntryGroup() }
-                        .font(.custom("Arial", size: 13))
-                        .foregroundStyle(Color.foldRed)
-                    Spacer()
-                    Text(notation.isEmpty ? "· · ·" : notation)
-                        .font(.custom("Courier New", size: 16))
-                        .fontWeight(.bold)
-                        .tracking(2)
-                        .foregroundStyle(notation.isEmpty ? Color.textMuted : Color.goldLight)
-                    Spacer()
-                    Button("Done") { closeEntry() }
-                        .font(.custom("Arial", size: 13))
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Color.gold)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 12)
-
-                // Rank grid — 7, then a centered 6 that nests into the gaps above.
+                // Rank grid — 7, then a centered 6 that nests into the gaps above. The strip slots
+                // serve as the live preview (no separate notation readout), so the picker is just
+                // the controls.
                 VStack(spacing: 6) {
                     rankRow(["A","K","Q","J","T","9","8"])
                     rankRow(["7","6","5","4","3","2"])
                 }
-                .padding(.bottom, 12)
 
-                // Suit row — five separate taps; "?" leaves the suit unknown.
-                HStack(spacing: 7) {
-                    suitButton("♠"); suitButton("♥"); suitButton("♦"); suitButton("♣")
-                    unknownSuitButton()
+                // Control row — Clear (trash) pinned left, the suit + shortcut cluster centered
+                // under the ranks, Done (checkmark) pinned right. The end icons are equal-width, so
+                // the matched Spacers keep the cluster truly centered regardless of either icon.
+                HStack(spacing: 0) {
+                    iconButton("trash", tint: Color.foldRed) { clearEntryGroup() }
+                    Spacer(minLength: 8)
+                    suitCluster(for: street)
+                    Spacer(minLength: 8)
+                    iconButton("checkmark", tint: Color(hex: "#0D0D0D"), filled: true) { closeEntry() }
                 }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
-
-                // Shortcut row — suited/offsuit (hole) or rainbow/mono (flop); none for turn/river.
-                shortcutRow(for: street)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 14)
             }
         }
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 14)
         .background(Color.surface)
         .overlay(alignment: .top) {
             Rectangle().fill(Color.borderDark.opacity(0.6)).frame(height: 1)
         }
+    }
+
+    /// The centered control cluster: the four suits + "x" (unknown), and — for hole/flop — a
+    /// divider followed by the relationship/texture shortcut squares (s/o or r/m). Turn and river
+    /// have no shortcuts, so their cluster is just the five suit squares.
+    @ViewBuilder
+    private func suitCluster(for street: CardStreet) -> some View {
+        HStack(spacing: 6) {
+            suitSquare("♠"); suitSquare("♥"); suitSquare("♦"); suitSquare("♣")
+            unknownSuitSquare()
+            if street == .hole || street == .flop {
+                Rectangle()
+                    .fill(Color.borderDark)
+                    .frame(width: 1, height: 30)
+                    .padding(.horizontal, 1)
+                shortcutSquares(for: street)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func shortcutSquares(for street: CardStreet) -> some View {
+        switch street {
+        case .hole:
+            shortcutSquare("s") { relationshipTapped("s") }
+            shortcutSquare("o") { relationshipTapped("o") }
+        case .flop:
+            shortcutSquare("r") { textureTapped("r") }
+            shortcutSquare("m") { textureTapped("m") }
+        case .turn, .river:
+            EmptyView()
+        }
+    }
+
+    /// A 34×34 utility icon button (Clear / Done). `filled` = gold fill (Done); otherwise a surface
+    /// tile with the tint-colored border (Clear's destructive red).
+    private func iconButton(_ systemName: String, tint: Color, filled: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 8).fill(filled ? Color.gold : Color.surface2))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(filled ? Color.goldLight : Color.foldRed.opacity(0.4), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Shorthand Transcript Panel
@@ -1298,63 +1326,44 @@ struct HandEntryView: View {
         }
     }
 
-    private func suitButton(_ suit: String) -> some View {
+    /// A 34×34 suit square. Hearts/diamonds render red; spades/clubs white.
+    private func suitSquare(_ suit: String) -> some View {
         Button(action: { suitTapped(suit) }) {
             Text(suit)
-                .font(.system(size: 22))
+                .font(.system(size: 18))
                 .foregroundStyle(["♥", "♦"].contains(suit) ? Color(hex: "#E74C3C") : Color.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 48)
+                .frame(width: 34, height: 34)
                 .background(Color.surface2)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.borderDark, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderDark, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    private func unknownSuitButton() -> some View {
+    /// The unknown-suit square — renders the shorthand marker "x" (e.g. Ax), suit left unrecorded.
+    private func unknownSuitSquare() -> some View {
         Button(action: { suitTapped(nil) }) {
-            Text("?")
-                .font(.system(size: 17, weight: .bold))
+            Text("x")
+                .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Color.textMuted)
-                .frame(maxWidth: .infinity)
-                .frame(height: 48)
+                .frame(width: 34, height: 34)
                 .background(Color.surface2)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.borderDark, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderDark, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
-    private func shortcutRow(for street: CardStreet) -> some View {
-        switch street {
-        case .hole:
-            HStack(spacing: 7) {
-                shortcutButton("Suited")  { relationshipTapped("s") }
-                shortcutButton("Offsuit") { relationshipTapped("o") }
-            }
-        case .flop:
-            HStack(spacing: 7) {
-                shortcutButton("Rainbow") { textureTapped("r") }
-                shortcutButton("Mono")    { textureTapped("m") }
-            }
-        case .turn, .river:
-            EmptyView()
-        }
-    }
-
-    private func shortcutButton(_ label: String, _ action: @escaping () -> Void) -> some View {
+    /// A 34×34 relationship/texture shortcut square (s/o for hole, r/m for flop).
+    private func shortcutSquare(_ label: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.custom("Arial", size: 13))
-                .fontWeight(.semibold)
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.goldLight)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
+                .frame(width: 34, height: 34)
                 .background(Color.surface2)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gold.opacity(0.3), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gold.opacity(0.35), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
