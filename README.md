@@ -110,7 +110,7 @@ Both halves operate independently. The user can fill in cards before recording a
      - **Post-flop (two contexts, dispatched on whether a bet exists)** — a skipped seat checks, never folds (no fold-by-skipping post-flop). Tapping a **resolved or folded seat** is a no-op in both. **No bet yet:** a tap does a post-flop jump mirroring the preflop jump — auto-*checks* the seat on the clock (if unacted) and every unacted seat skipped clockwise, then lands the tapped seat at Check (tap again to cycle Check → Bet). **A bet exists:** strict order only — only the exact next seat that owes action can be tapped; it commits the seat on the clock (default Call) and lands the tapped seat at Call.
    - **Direct seat swipe** (decisive shortcut) — swipe a seat to record a specific action in one gesture, without cycling: **← Fold, ↑ Raise, → Bet, ↓ Call/Check** (resolved by context; a direction that's illegal in the current context is a no-op). A swipe follows the same routing as a tap but lands the swiped action directly instead of cycling to it, then **advances the ring to the next player without seeding any action on it** — behaviorally identical to an action-button press. (Seeding the next seat is exactly what it must *not* do: that would commit a decision the user never made. The next seat enters empty/waiting; tapping past it later auto-folds/-checks it correctly.) A swipe that *closes* a street holds on that seat and lights the Next Street button — it never advances the street. (Implemented in `HandEntryView.swift` routing + `SeatSelectionView.swift` gestures.)
    - **Hold-to-size** (optional) — press and hold a seat, then slide, to attach a size to a bet/raise (`2.5x`, `40%`, `Pot`, `All-in`); a floating readout follows the thumb, snapping to the strip. Quick swipe = unsized; hold = sized. Sizes are relative notation only — no chip/pot math. Shown as a pill on the seat's bottom rim.
-   - **Card strip** (bottom half): tap any slot to open the **per-street card picker**, which **docks in the gap below the strip** — the strip slots stay visible and act as the frames, so nothing is covered or duplicated. It enters a whole street at once (**2 hole, 3 flop, 1 turn, 1 river**) with the rank grid and suit buttons on **one screen** (no rank→suit step). Tap a rank to fill the focused frame, tap a suit (♠ ♥ ♦ ♣ or `?` for unknown). Hole cards add a **Suited / Offsuit** shortcut; flop adds **Rainbow / Mono**. Suit is always optional. See `ShorthandReference.md` §2 for the notation.
+   - **Card strip** (bottom half): tap any slot to open the **per-street card picker**, which **docks in the gap below the strip** — the strip slots stay visible and act as both the frames and the live preview (no separate notation readout). Entry is **left-to-right**: tapping any slot focuses the left-most empty frame. A whole street is entered at once (**2 hole, 3 flop, 1 turn, 1 river**) with the rank grid, suit buttons (♠ ♥ ♦ ♣ + explicit **x**), and relationship shortcuts on one screen. A **slim grab handle** (tap or swipe down) dismisses; **Next** (`›`) jumps to the next bank (hole → flop → turn → river, `✓` on the river); a trash icon clears the bank. See **Card Entry** below and `ShorthandReference.md` §2 for the notation.
 
 5. **Street progression** — a street is closed once all active players have acted / responded to the last raise. **Only the Next Street button advances the street** — no input (action button, tap, or swipe) ever advances it. A closing action holds the ring on the acting seat and lights the Next Street button; the user taps it to advance. On advance, state resets for the next street (actions cleared, bet level reset, highlight moves to first active seat left of dealer). The Next Street button label updates: Flop → Turn → River → Showdown.
 
@@ -148,15 +148,22 @@ Both halves operate independently. The user can fill in cards before recording a
 
 ### Card Entry
 
-Card entry is **per-street group entry**, not slot-by-slot. Tapping any slot opens that street's picker, which **docks in the gap below the strip** (the strip slots are the frames and stay visible — see Recording above).
+Card entry is **per-street group entry**, not slot-by-slot. Tapping any slot opens that street's picker, which **docks in the gap below the strip** (the strip slots are the frames and the live preview — there is no separate notation readout). The data model is a per-street **`CardGroup`** of **`CardFrame`s**; each group carries exactly one **suit mode**.
 
-- **One sheet per street:** hole = 2 frames, flop = 3, turn = 1, river = 1. The picker only ever shows the tapped street's frames.
-- **Rank + suit on one screen** (no rank→suit swap): tap a rank to fill the **focused** frame (it auto-advances to the next empty frame, then back to the first for suiting); tap a suit (♠ ♥ ♦ ♣) or `?` for unknown; tap a frame to re-focus it.
-- **Hole** adds **Suited / Offsuit** (sets both cards' relationship); **flop** adds **Rainbow / Mono** (sets the texture). Suit is always optional.
-- **Live notation readout** shows the shorthand form as you go (`AJs`, `AsJx`, `Q53r`, `Jh`, `5x`).
+- **One group per street:** hole = 2 frames, flop = 3, turn = 1, river = 1.
+- **Left-to-right entry.** Tapping any slot focuses the **left-most empty** frame — the tapped index is ignored, since order does not matter. A rank fills the cursor frame and the cursor is "the card you just typed"; a following suit binds to it. Typing a rank into an **already-full** group **clears it and starts over** (you redo a hand by re-entering, never by editing one card). Re-opening a completed group is **display-only** until you start typing.
+
+**Three suit modes** (mutually exclusive, chosen as you enter):
+- **Bound** (interleaved) — a suit is assigned to a *specific* card. Rank then its suit: `AdJx` (Ace is the diamond, Jack unknown), flop `Qh5h3x`. The suit shows **on the card face**.
+- **Footnote** (ranks first, then suits) — suits are an *unassigned* note on the group ("one of these is a diamond, doesn't matter which"). Rendered as lowercase letters padded to N with `x`, in a caption **beneath the group**: `AJdx`, `Q53hhx`.
+- **Relationship** — an abstract texture from a shortcut button, shown as a **word** beneath the group: `suited` / `offsuit` (hole, `s`/`o`), `rainbow` / `mono` / `two tone` (flop, `r`/`m`/`tt`).
+
+- **Explicit `x`** is a first-class card state distinct from a blank frame — pressing `x` shows the `x` immediately and reads `Jx` / `Qx`, even alone. A frame simply *left* unsuited renders bare unless a partner card carries a real suit, in which case it reads `x` too (`AhKx`).
+- **Two-tier, mutually-exclusive gating:** the suit buttons (`♠ ♥ ♦ ♣ x`) are live once the group has ≥1 rank, **unless** it is committed to a relationship; the relationship shortcuts are live only when **all** ranks are in and no specific suit has been chosen — and never for a **hole pair** (no `88s`; `88o` is assumed, never written). So at "both ranks, nothing chosen" both sets are live; the first suit turns the shortcuts off, the first shortcut turns the suits off.
+- **Turn / River are bound-only** (a single card has no "which card" ambiguity) — rank + optional suit, no footnote or relationship.
 - The 7–2 rank row is centered to nest into the gaps of the A–8 row above.
-- Accepted notation: `AK`, `AKo`, `AKs`, `AhKs`, `AsKx`; flop `Q53r` / `Q53m` / `Qh5h3x`.
-- "Clear" empties the whole group; "Done" dismisses.
+- Accepted notation: hole `AK`, `AKo`, `AKs`, `AhKs`, `AsKx`, footnote `AJdx`; flop `Q53r` / `Q53m` / `Q53tt` / `Qh5h3x` / footnote `Q53hhx`.
+- The trash icon clears the group; the slim grab handle (tap / swipe down) dismisses; **Next** (`›`) advances to the next bank (`✓` on the river).
 
 ### Hand Shorthand Transcript
 
@@ -272,7 +279,7 @@ A running **shorthand text** of the hand renders in the gap below the strip (the
 - Showdown overlay (Win / Lose / Chop) triggered on river close with 2+ players
 - Hand outcome summary state with colored status dot and descriptive text; deal the next hand by tapping a seat to place the button (no New Hand button)
 - `handNumber` single source of truth — advances only when the next hand is dealt (tap a seat from the closed state)
-- Per-street card picker — docks in the gap below the strip (strip slots are the frames, never covered); one sheet per street (hole pair / flop / turn / river) with rank + suit on one screen, Suited/Offsuit (hole) and Rainbow/Mono (flop) shortcuts, live notation readout
+- Per-street card picker — docks in the gap below the strip (strip slots are the frames and the live preview); per-street `CardGroup`/`CardFrame` with one suit mode each — **bound** (`AdJx`, suit on the face), **footnote** (`AJdx`, unassigned suit letters in a caption), **relationship** (`suited`/`offsuit`/`rainbow`/`mono`/`two tone`). Left-to-right entry, explicit `x` as a first-class card state, mutually-exclusive suit/shortcut gating (pairs disable `s`/`o`), type-a-rank-clears-a-full-group, slim grab handle to dismiss, and a Next (`›`) control that advances bank-to-bank
 - Hand shorthand transcript — running Courier text of the hand in the same gap, a pure render of the action log with a Copy-to-clipboard button; grammar in `ShorthandReference.md`
 - Aggression symbols: → = post-flop bet; raise pip-layouts: ↑↑ side-by-side (2-bet), triangle (3-bet), 2×2 grid (4-bet), ↑ + badge number (5-bet+)
 - New Session screen (Cash / Tournament)
@@ -323,6 +330,7 @@ A running **shorthand text** of the hand renders in the gap below the strip (the
 - **`isAutoFolded` naming.** The `isAutoFolded: Bool` flag on `Action` is the batch-rewind marker for *all* system-generated actions — preflop auto-folds (`preflopJump`) and post-flop auto-checks (`postflopJump`). The name is misleading for the check case; rename to `isAutoAction` in a future pass.
 - **Two position-label paths diverge as players fold.** Table display labels (`seatPositions`) are computed over all seats (`Array(0..<tableSize)`), while labels frozen onto `Action` records (`positionFor(seat:)`) use `activeSeatSequence` (active only). These drift apart once seats fold; reconcile in a future pass.
 - **Seat gestures are deliberately one `DragGesture`.** Tap/swipe/hold-to-size are all classified inside a single `DragGesture(minimumDistance: 0)` in `SeatSelectionView.swift` — do **not** split them into `.onTapGesture` + `.simultaneousGesture` + `.highPriorityGesture`. SwiftUI's arbitration between layered recognizers is fragile (iOS 18 worsens it) and a shared mute-flag gets stuck. See the comment on that gesture for the full rationale and tuning dials.
+- **Card entry is lossy on save.** The live `CardGroup`/`CardFrame` suit modes (bound/footnote/relationship, explicit `x`) are the faithful artifact only *while recording* — the shorthand transcript renders them in full. On save, `buildHeroCards()` collapses to per-card `Card.suit` (so footnote/relationship distinctions are lost), and board cards (flop/turn/river groups) are not persisted at all. Reconcile when cloud sync / the History screen lands.
 
 ---
 
