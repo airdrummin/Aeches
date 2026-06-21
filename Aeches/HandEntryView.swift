@@ -138,7 +138,9 @@ struct HandEntryView: View {
     /// Live whenever there is something to undo: an action on this/earlier street, or a closed
     /// hand to re-open (showdown overlay or hand-closed state are both reversible).
     private var rewindButtonEnabled: Bool {
-        phase == .showdown || phase == .handClosed
+        // During recording there is always at least the button placement to undo (pick the button
+        // back up), so Undo is live the moment a hand starts — even before any action is recorded.
+        phase == .showdown || phase == .handClosed || phase == .recordingHand
             || !actionsThisStreet.isEmpty || !streets.isEmpty
     }
 
@@ -833,11 +835,21 @@ struct HandEntryView: View {
         // then undoes within that street. This is what makes Rewind cross a boundary cleanly:
         // empty flop + BB highlighted → reopen preflop with BB (its last actor) still highlighted.
         if actionsThisStreet.isEmpty {
-            guard let prev = streets.popLast() else { return }
-            currentStreet = prev.name
-            actionsThisStreet = prev.actions
-            recomputeDerivedState()
-            highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
+            if let prev = streets.popLast() {
+                currentStreet = prev.name
+                actionsThisStreet = prev.actions
+                recomputeDerivedState()
+                highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
+                return
+            }
+            // Nothing recorded this hand and no earlier street to reopen — the only thing left to
+            // undo is the button placement. Pick the button back up and return to placingButton so
+            // the user can re-drop it on another seat. Hand number is unchanged (same hand).
+            buttonSeat = nil
+            activeSeatSequence = []
+            highlightedSeat = nil
+            streetClosedDecisively = false
+            phase = .placingButton
             return
         }
 

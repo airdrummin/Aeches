@@ -65,7 +65,7 @@ struct TableOvalView: View {
             let cy = h / 2
             let rx = w * 0.40
             let ry = h * 0.36
-            let railW = w * 0.058
+            let railW = w * 0.045
 
             ZStack {
 
@@ -140,7 +140,7 @@ struct TableOvalView: View {
                             endRadius: max(rx, ry) * 1.6
                         )
                     )
-                    .frame(width: rx * 1.82, height: ry * 1.82)
+                    .frame(width: rx * 1.88, height: ry * 1.88)
 
                 // Felt vignette
                 Ellipse()
@@ -152,7 +152,7 @@ struct TableOvalView: View {
                             endRadius: max(rx, ry) * 0.95
                         )
                     )
-                    .frame(width: rx * 1.82, height: ry * 1.82)
+                    .frame(width: rx * 1.88, height: ry * 1.88)
 
                 // ── Brass pinstripe — two arcs ─────────────────────────
                 let pinW: CGFloat = rx * 1.72
@@ -217,7 +217,6 @@ struct TableOvalView: View {
                     SeatButtonView(
                         index: i,
                         isHero: heroSeat == i,
-                        hasButton: buttonSeat == i,
                         state: seatStates[i],
                         isActive: activeSeat == i,
                         position: positions[i]
@@ -290,6 +289,21 @@ struct TableOvalView: View {
                             }
                     )
                 }
+
+                // ── Dealer button — on the felt, in front of the seat ──
+                // Placed along the seat→center line so it sits on the table (real-table read) and
+                // stays on-screen for every seat, including the edges. `inset` = distance onto felt.
+                if let btn = buttonSeat {
+                    let seat = seatPosition(index: btn, total: tableSize, cx: cx, cy: cy, rx: rx, ry: ry)
+                    let dx = cx - seat.x
+                    let dy = cy - seat.y
+                    let len = max(1, (dx * dx + dy * dy).squareRoot())
+                    let inset: CGFloat = 40
+                    DealerPuck()
+                        .position(x: seat.x + dx / len * inset,
+                                  y: seat.y + dy / len * inset)
+                }
+
                 // ── Dealer label — drawn last so it sits on top ────────
                 HStack(spacing: 7) {
                     Rectangle()
@@ -369,7 +383,6 @@ struct SeatState {
 struct SeatButtonView: View {
     let index: Int
     let isHero: Bool
-    let hasButton: Bool
     let state: SeatState?
     let isActive: Bool
     var position: String? = nil
@@ -620,22 +633,28 @@ struct SeatButtonView: View {
                 }
             }
             .opacity(isFoldedOut ? 0.5 : 1.0)
-
-            if hasButton {
-                ZStack {
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 18, height: 18)
-                        .shadow(color: .black.opacity(0.4), radius: 3)
-                        .overlay(Circle().stroke(Color.gold, lineWidth: 1.5))
-                    Text("D")
-                        .font(.system(size: 8, weight: .black))
-                        .foregroundStyle(Color.black)
-                }
-                .offset(x: 18, y: -18)
-            }
         }
         .frame(width: size, height: size)
+    }
+}
+
+// MARK: - Dealer Button Puck
+
+/// The dealer button, drawn on the felt in front of a seat (positioned by `TableOvalView`) rather
+/// than pinned to the seat's corner — so it reads like a real table and never clips off-screen on
+/// edge seats.
+struct DealerPuck: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.white)
+                .frame(width: 20, height: 20)
+                .shadow(color: .black.opacity(0.45), radius: 3)
+                .overlay(Circle().stroke(Color.gold, lineWidth: 1.5))
+            Text("D")
+                .font(.system(size: 9, weight: .black))
+                .foregroundStyle(Color.black)
+        }
     }
 }
 
@@ -664,7 +683,7 @@ func seatPosition(index: Int, total: Int, cx: CGFloat, cy: CGFloat, rx: CGFloat,
     let deg = startDeg - Double(index) * step
     let rad = deg * .pi / 180
     return CGPoint(
-        x: cx + rx * 1.15 * cos(rad),
+        x: cx + rx * 1.04 * cos(rad),   // tightened from 1.15 so edge seats' pills clear the screen
         y: cy - ry * 1.15 * sin(rad)
     )
 }
