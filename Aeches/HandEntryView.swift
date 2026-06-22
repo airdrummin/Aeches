@@ -1318,15 +1318,15 @@ struct HandEntryView: View {
             )
     }
 
-    /// The advance control: a 34×34 gold tile, `›` to jump to the next bank (hole → flop → turn →
+    /// The advance control: a 30×40 gold tile, `›` to jump to the next bank (hole → flop → turn →
     /// river), or `✓` on the river (no next bank) to dismiss.
     private var nextBankButton: some View {
         let isRiver = entryStreet == .river
         return Button(action: advanceOrFinishEntry) {
             Image(systemName: isRiver ? "checkmark" : "chevron.right")
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color(hex: "#0D0D0D"))
-                .frame(width: 30, height: 30)
+                .frame(width: 30, height: 40)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.gold))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.goldLight, lineWidth: 1))
         }
@@ -1338,13 +1338,13 @@ struct HandEntryView: View {
     /// have no shortcuts, so their cluster is just the five suit squares.
     @ViewBuilder
     private func suitCluster(for street: CardStreet) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 8) {
             suitSquare("♠"); suitSquare("♥"); suitSquare("♦"); suitSquare("♣")
             unknownSuitSquare()
             if street == .hole || street == .flop {
                 Rectangle()
                     .fill(Color.borderDark)
-                    .frame(width: 1, height: 28)
+                    .frame(width: 1, height: 30)
                 shortcutSquares(for: street)
             }
         }
@@ -1370,9 +1370,9 @@ struct HandEntryView: View {
     private func iconButton(_ systemName: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(tint)
-                .frame(width: 30, height: 30)
+                .frame(width: 30, height: 40)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(tint.opacity(0.4), lineWidth: 1))
         }
@@ -1494,12 +1494,12 @@ struct HandEntryView: View {
 
     @ViewBuilder
     private func rankRow(_ ranks: [String]) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             ForEach(ranks, id: \.self) { r in
                 Button(action: { rankTapped(r) }) {
                     Text(r)
-                        .font(.system(size: 16, weight: .bold))
-                        .frame(width: 40, height: 40)
+                        .font(.system(size: 18, weight: .bold))
+                        .frame(width: 40, height: 48)
                         .background(Color.surface2)
                         .foregroundStyle(Color.textBody)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -1510,14 +1510,14 @@ struct HandEntryView: View {
         }
     }
 
-    /// A 30×30 suit square. Hearts/diamonds render red; spades/clubs white. Dimmed/disabled until the
+    /// A 34×40 suit square. Hearts/diamonds render red; spades/clubs white. Dimmed/disabled until the
     /// open group has at least one rank and isn't committed to a relationship (`suitsActive`).
     private func suitSquare(_ suit: String) -> some View {
         Button(action: { suitTapped(suit) }) {
             Text(suit)
-                .font(.system(size: 17))
+                .font(.system(size: 18))
                 .foregroundStyle(["♥", "♦"].contains(suit) ? Color(hex: "#E74C3C") : Color.white)
-                .frame(width: 30, height: 30)
+                .frame(width: 34, height: 40)
                 .background(Color.surface2)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderDark, lineWidth: 1))
@@ -1531,9 +1531,9 @@ struct HandEntryView: View {
     private func unknownSuitSquare() -> some View {
         Button(action: { suitTapped(nil) }) {
             Text("x")
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Color.textMuted)
-                .frame(width: 30, height: 30)
+                .frame(width: 34, height: 40)
                 .background(Color.surface2)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderDark, lineWidth: 1))
@@ -1543,14 +1543,14 @@ struct HandEntryView: View {
         .opacity(suitsActive ? 1.0 : 0.35)
     }
 
-    /// A 30×30 relationship/texture shortcut square (s/o hole; r/m/tt flop). Dimmed/disabled until the
+    /// A 34×40 relationship/texture shortcut square (s/o hole; r/m/tt flop). Dimmed/disabled until the
     /// open group's ranks are all filled and no specific suit is committed (`relActive`).
     private func shortcutSquare(_ label: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: label.count > 1 ? 12 : 15, weight: .bold))
+                .font(.system(size: label.count > 1 ? 14 : 17, weight: .bold))
                 .foregroundStyle(Color.goldLight)
-                .frame(width: 30, height: 30)
+                .frame(width: 34, height: 40)
                 .background(Color.surface2)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gold.opacity(0.35), lineWidth: 1))
