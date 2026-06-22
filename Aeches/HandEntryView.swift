@@ -86,6 +86,12 @@ struct HandEntryView: View {
         phase == .placingButton || phase == .recordingHand || phase == .showdown || phase == .handClosed
     }
 
+    /// Fixed height of the dock's control region — sized to the taller of its two states: the control
+    /// bar (~124) plus a 5-line transcript slot (~110). The card picker (~174 natural) is shorter, so
+    /// it fills this region with distributed spacing. Holding this constant across both states keeps
+    /// the aspect-locked table from shifting when the picker opens. See DisplayLayoutPlan.md.
+    private let controlRegionHeight: CGFloat = 234
+
     private var feltActionText: String? {
         guard phase == .recordingHand, !streetClosedDecisively, let seat = highlightedSeat else { return nil }
         let pos = seatPositions[seat] ?? "?"
@@ -230,12 +236,16 @@ struct HandEntryView: View {
                     onSeatSize: handleSeatSize,
                     instruction: tableInstruction,
                     actionText: feltActionText,
-                    // A fixed, moderate felt for the whole hand (button placement → showdown) — the
-                    // compact size, never the blown-up round oval. The transcript below is the flexible
-                    // element that fills the remaining slack, so there is no mid-screen void. Seat-select
-                    // keeps the standalone 300 table.
-                    minHeight: isPlayingPhase ? 250 : 300,
-                    maxHeight: isPlayingPhase ? 250 : 300
+                    // One consistent table size across every phase (seat-select → showdown). The oval
+                    // is aspect-locked (TableOvalView), so these bounds only control the frame margin,
+                    // never the oval shape. During play the frame is the flexible element: it absorbs all
+                    // device slack as margin around the oval (maxHeight .infinity) while the dock below is
+                    // fixed-height — that's what pins the table still and the dock to the bottom with no
+                    // void. On seat-select there is no dock, so the frame is clamped (320) and the Spacer
+                    // below fills the rest. minHeight guarantees swipe room everywhere.
+                    // See DisplayLayoutPlan.md §#1 and §"Layout model".
+                    minHeight: 290,
+                    maxHeight: isPlayingPhase ? .infinity : 320
                 )
                 .overlay {
                     if phase == .showdown {
@@ -276,34 +286,43 @@ struct HandEntryView: View {
                     .background(Color.borderDark)
                     .padding(.top, 8)
 
-                // ── Bottom half — card strip + shared action/picker zone ──────
-                // The table sits directly above this zone. The card picker REPLACES the action
-                // buttons while a card group is open (Option 3) — it never covers the transcript
-                // sliver, which Phase 2 adds below this zone.
+                // ── Bottom half — card strip + fixed-height control region ──────
+                // The dock (strip + control region) is fixed-height and pinned to the bottom; the table
+                // above absorbs device slack. The control region is a CONSTANT height whether it holds
+                // the control bar (+ transcript beneath) or the card picker — that constancy is what
+                // keeps the aspect-locked table from moving when the picker opens. The picker REPLACES
+                // the control bar + transcript while a card group is open (they never co-exist).
+                // See DisplayLayoutPlan.md §"Layout model".
                 if isPlayingPhase {
                     cardStrip
                         .padding(.top, 10)
 
-                    if entryStreet != nil {
-                        cardPickerPanel
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    } else {
-                        ControlBar(
-                            isRecording: phase == .recordingHand,
-                            currentStreet: currentStreet,
-                            openBetExists: openBetExists,
-                            highlightedSeat: highlightedSeat,
-                            rewindEnabled: rewindButtonEnabled,
-                            nextStreetEnabled: nextStreetButtonEnabled,
-                            nextStreetPulsing: streetClosedDecisively,
-                            nextStreetLabel: nextStreetLabel,
-                            onAction: { commitAction($0) },
-                            onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
-                            onNextStreet: handleNextStreet
-                        )
+                    Group {
+                        if entryStreet != nil {
+                            cardPickerPanel
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        } else {
+                            VStack(spacing: 0) {
+                                ControlBar(
+                                    isRecording: phase == .recordingHand,
+                                    currentStreet: currentStreet,
+                                    openBetExists: openBetExists,
+                                    highlightedSeat: highlightedSeat,
+                                    rewindEnabled: rewindButtonEnabled,
+                                    nextStreetEnabled: nextStreetButtonEnabled,
+                                    nextStreetPulsing: streetClosedDecisively,
+                                    nextStreetLabel: nextStreetLabel,
+                                    onAction: { commitAction($0) },
+                                    onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
+                                    onNextStreet: handleNextStreet
+                                )
+                                // Fills the region beneath the control bar — 3–5 lines, scrolls to the
+                                // newest action; the full hand is the expand drawer.
+                                transcriptInline
+                            }
+                        }
                     }
-
-                    transcriptInline
+                    .frame(height: controlRegionHeight)
                 } else {
                     Spacer(minLength: 0)
                 }
@@ -1231,10 +1250,16 @@ struct HandEntryView: View {
     // Docked below the strip (not a covering sheet). The strip slots are the frames — they stay
     // visible and highlight the focused one — so the picker shows only the controls, no duplicate cards.
     private var cardPickerPanel: some View {
-        VStack(spacing: 10) {
+        // Fills the fixed control region (controlRegionHeight). The picker's natural height is shorter
+        // than the region, so the Spacers distribute the surplus as generous spacing between the rows
+        // (the handle stays pinned to the top to keep its swipe-down dismiss obvious). The surface
+        // background fills the whole region, so there is no visible gap. See DisplayLayoutPlan.md §#3.
+        VStack(spacing: 0) {
             if let street = entryStreet {
                 // Slim grab handle — tap or swipe down to dismiss ("no more cards / stop here").
                 grabHandle
+
+                Spacer(minLength: 10)
 
                 // Rank grid — row 1 (the seven) full width; row 2 (the shorter six) flanked by Clear
                 // (trash, left) and Next (›, right), using that row's natural side-space so the suit
@@ -1251,6 +1276,8 @@ struct HandEntryView: View {
                     }
                 }
 
+                Spacer(minLength: 12)
+
                 // Suit + shortcut cluster — its own full-width centered row, uncramped even on the
                 // wide flop set (♠ ♥ ♦ ♣ x │ r m tt).
                 HStack(spacing: 0) {
@@ -1258,9 +1285,11 @@ struct HandEntryView: View {
                     suitCluster(for: street)
                     Spacer(minLength: 0)
                 }
+
+                Spacer(minLength: 6)
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 14)
@@ -1352,11 +1381,11 @@ struct HandEntryView: View {
 
     // MARK: - Bottom Transcript (inline tail + expand-up drawer)
 
-    /// The inline transcript at the bottom of the play layout: a header (tap the chevron to expand the
-    /// full hand up; Copy) over a scrollable tail of the running shorthand. It is the FLEXIBLE element
-    /// — it fills the slack below the fixed-size table (so a few lines show normally, more on tall
-    /// phones) and shrinks when the picker pushes up. The picker never covers it; it sits below the
-    /// action/picker zone in the stack.
+    /// The inline transcript inside the dock's control region, beneath the control bar: a header (tap the
+    /// chevron to expand the full hand up; Copy) over a scrollable tail of the running shorthand. It fills
+    /// the region's remaining space below the control bar (~3–5 lines), auto-scrolling to the newest
+    /// action; the full hand is the expand drawer. It is hidden while the picker is open (the picker takes
+    /// the whole control region), so the two never co-exist. See DisplayLayoutPlan.md §#4.
     private var transcriptInline: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -2016,11 +2045,11 @@ private struct ControlBar: View {
         let isDisabled = highlightedSeat == nil
         Button(action: { onAction(type) }) {
             Text(label)
-                .font(.custom("Arial", size: 14))
+                .font(.custom("Arial", size: 16))
                 .fontWeight(.bold)
                 .foregroundStyle(chipForeground(style))
                 .frame(maxWidth: .infinity)
-                .frame(height: 48)
+                .frame(height: 54)
                 .background(chipBackground(style))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(

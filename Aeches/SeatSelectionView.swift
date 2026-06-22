@@ -66,7 +66,11 @@ struct TableOvalView: View {
             let cx = w / 2
             let cy = h / 2
             let rx = w * 0.40
-            let ry = h * 0.36
+            // Aspect-lock: the vertical radius is derived from the horizontal one (a fixed 1.40
+            // width:height ratio) rather than from the frame height. This makes the oval
+            // incapable of distorting — extra frame height becomes pure margin around it, never a
+            // rounder egg. See DisplayLayoutPlan.md §#1.
+            let ry = rx / 1.4
             let railW = w * 0.045
 
             ZStack {
