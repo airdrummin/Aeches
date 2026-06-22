@@ -76,6 +76,16 @@ Three rank+suit tokens, in entry order:
 A single rank+suit token: `Jh`, `5x`, `2c`. (Single cards are bound-only — no footnote or
 relationship.)
 
+**Board-suit count (turn/river only).** When a turn or river card brings a significant suit, the
+suit letter may be **repeated to show how many of that suit are now on the board** — a flush draw or
+made flush. The card is still that one suit; the repetition is a board annotation, user-asserted:
+- `4ss` — the spade makes **two** on board (flush *draw*).
+- `4sss` — **three** on board.
+- `4ssss` / `4sssss` — four / five (made flush on turn / river).
+
+Counts that can matter per street: **turn `2–4`**, **river `3–5`** (two of a suit can't make or draw a
+flush on the river). A plain single suit (`4s`) is unchanged.
+
 ---
 
 ## 3. Positions

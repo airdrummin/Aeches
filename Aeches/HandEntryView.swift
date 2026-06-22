@@ -1283,6 +1283,7 @@ struct HandEntryView: View {
                         // already carries a real suit (the inferred AhKx case).
                         boundUnknown: g.mode == .bound &&
                             (g.frames[i].suit == .unknown || (g.frames[i].suit == .unspecified && anyKnown)),
+                        suitRun: g.suitRun,   // turn/river board count → repeated pips (1 elsewhere)
                         isActive: entryStreet == street && focusIndex == i
                     )
                     .onTapGesture { openCardEntry(street) }
@@ -1448,8 +1449,45 @@ struct HandEntryView: View {
                     .fill(Color.borderDark)
                     .frame(width: 1, height: 30)
                 shortcutSquares(for: street)
+            } else {
+                // Turn/river: the relationship slot instead holds the board-count ×N buttons.
+                Rectangle()
+                    .fill(Color.borderDark)
+                    .frame(width: 1, height: 30)
+                multiplierSquares(for: street)
             }
         }
+    }
+
+    /// The suit-skinned board-count buttons for turn/river (`♥2 ♥3 ♥4` / `♥3 ♥4 ♥5`). They adopt the
+    /// chosen suit's glyph + color and are disabled until a real suit is set (an `x` can't be multiplied).
+    @ViewBuilder
+    private func multiplierSquares(for street: CardStreet) -> some View {
+        let suitSym = entryGroup?.frames.first?.suit.knownSymbol
+        let cur = entryGroup?.suitRun ?? 1
+        ForEach(suitRunCycle(for: street).dropFirst(), id: \.self) { n in
+            multiplierSquare(n: n, suitSymbol: suitSym, selected: cur == n)
+        }
+    }
+
+    private func multiplierSquare(n: Int, suitSymbol: String?, selected: Bool) -> some View {
+        let active = !entryLocked && suitSymbol != nil
+        let suitColor: Color = suitSymbol.map { ["♥", "♦"].contains($0) ? Color(hex: "#E0524A") : Color.white }
+            ?? Color.textMuted
+        return Button(action: { multiplierTapped(n) }) {
+            HStack(spacing: 1) {
+                Text(suitSymbol ?? "♠").font(.system(size: 14)).foregroundStyle(suitColor)
+                Text("\(n)").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.textBody)
+            }
+            .frame(height: 40)
+            .padding(.horizontal, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(selected ? Color.gold : Color.borderDark, lineWidth: selected ? 1.5 : 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!active)
+        .opacity(active ? 1.0 : 0.35)
     }
 
     @ViewBuilder
@@ -1775,7 +1813,21 @@ struct HandEntryView: View {
 
         switch g.mode {
         case .bound:
-            g.frames[focusIndex].suit = symbol.map(FrameSuit.known) ?? .unknown   // x → explicit unknown
+            // Turn/river (single frame) with a real suit: re-tapping the SAME suit cycles the board
+            // count (the fast path alongside the ×N buttons). A different suit, or x, resets the run.
+            if g.capacity == 1, let sym = symbol {
+                if g.frames[0].suit.knownSymbol == sym {
+                    let cycle = suitRunCycle(for: street)
+                    let idx = cycle.firstIndex(of: g.suitRun) ?? 0
+                    g.suitRun = cycle[(idx + 1) % cycle.count]
+                } else {
+                    g.frames[0].suit = .known(sym)
+                    g.suitRun = 1
+                }
+            } else {
+                g.frames[focusIndex].suit = symbol.map(FrameSuit.known) ?? .unknown   // x → explicit unknown
+                if g.capacity == 1 { g.suitRun = 1 }   // x / reset on a single card
+            }
         case .footnote:
             let letter = symbol.map(suitLetter) ?? "x"
             if g.footnote.count < g.capacity {
@@ -1800,6 +1852,23 @@ struct HandEntryView: View {
         g.relationship = value
         g.footnote = []; g.footnoteCursor = 0
         for i in g.frames.indices { g.frames[i].suit = .unspecified }
+        setGroup(street, g)
+    }
+
+    /// The board-count steps for a street's ×N multipliers and the re-tap cycle. Turn maxes at 4 of a
+    /// suit; the river adds 5 but drops 2 (two of a suit can't make/draw a flush on the final card).
+    /// The leading 1 is the plain single-suit card. Turn/river only.
+    private func suitRunCycle(for street: CardStreet) -> [Int] {
+        street == .river ? [1, 3, 4, 5] : [1, 2, 3, 4]
+    }
+
+    /// Tap a ×N multiplier on a turn/river card: set the board count directly. Requires a real suit
+    /// already chosen (an `x` or blank can't be multiplied).
+    private func multiplierTapped(_ n: Int) {
+        guard let street = entryStreet, street == .turn || street == .river else { return }
+        var g = group(for: street)
+        guard g.frames.first?.suit.knownSymbol != nil else { return }
+        g.suitRun = n
         setGroup(street, g)
     }
 
@@ -1836,7 +1905,9 @@ struct HandEntryView: View {
             return g.frames.compactMap { f -> String? in
                 guard let r = f.rank else { return nil }
                 switch f.suit {
-                case .known(let s): return r + suitLetter(s)
+                // The suit letter repeats by suitRun — the turn/river board count (4h / 4hh / 4hhh).
+                // suitRun is 1 everywhere except a multiplied turn/river card, so hole/flop are unchanged.
+                case .known(let s): return r + String(repeating: suitLetter(s), count: g.suitRun)
                 case .unknown:      return r + "x"
                 case .unspecified:  return markUnknown ? r + "x" : r
                 }
@@ -2222,6 +2293,7 @@ struct CardGroup: Equatable {
     var footnote: [String] = []      // ordered suit letters ("s/h/d/c" or "x"); used only in .footnote
     var footnoteCursor: Int = 0      // wrap-replace pointer once the footnote is full
     var relationship: String? = nil  // "s","o" (hole) | "r","m","tt" (flop); used only in .relationship
+    var suitRun: Int = 1             // turn/river only: count of this card's suit on the board (4h=1, 4hhh=3)
 
     var capacity: Int { frames.count }
     var ranksFilled: Int { frames.filter { $0.rank != nil }.count }
@@ -2233,7 +2305,7 @@ struct CardGroup: Equatable {
 
     mutating func reset() {
         frames = Array(repeating: CardFrame(), count: capacity)
-        mode = .none; footnote = []; footnoteCursor = 0; relationship = nil
+        mode = .none; footnote = []; footnoteCursor = 0; relationship = nil; suitRun = 1
     }
 }
 
@@ -2243,6 +2315,7 @@ struct CardFrameView: View {
     let frame: CardFrame
     var showBoundSuit: Bool = false   // true only in .bound mode — draws the suit pip on the face
     var boundUnknown: Bool = false    // bound, suitless, but a partner card is suited → grey "x"
+    var suitRun: Int = 1              // turn/river: draw the suit pip this many times (board count)
     let isActive: Bool
 
     var body: some View {
@@ -2268,9 +2341,14 @@ struct CardFrameView: View {
                     // and relationship are shown by the group pill (see groupSection), so the face is
                     // rank-only there.
                     if showBoundSuit, let suit = frame.suit.knownSymbol {
-                        Text(suit)
-                            .font(.system(size: 9))
-                            .foregroundStyle(suitColor)
+                        // One pip normally; turn/river repeat it by suitRun (board count) — sized down so
+                        // up to five fit the 40px card.
+                        HStack(spacing: 1) {
+                            ForEach(0..<max(1, suitRun), id: \.self) { _ in
+                                Text(suit).foregroundStyle(suitColor)
+                            }
+                        }
+                        .font(.system(size: suitRun >= 4 ? 7 : (suitRun >= 2 ? 8 : 9)))
                     } else if boundUnknown {
                         Text("x")
                             .font(.system(size: 8, weight: .bold))
