@@ -155,8 +155,15 @@ Card entry is **per-street group entry**, not slot-by-slot. Tapping any slot ope
 
 **Three suit modes** (mutually exclusive, chosen as you enter):
 - **Bound** (interleaved) — a suit is assigned to a *specific* card. Rank then its suit: `AdJx` (Ace is the diamond, Jack unknown), flop `Qh5h3x`. The suit shows **on the card face**.
-- **Footnote** (ranks first, then suits) — suits are an *unassigned* note on the group ("one of these is a diamond, doesn't matter which"). Rendered as lowercase letters padded to N with `x`, in a caption **beneath the group**: `AJdx`, `Q53hhx`.
-- **Relationship** — an abstract texture from a shortcut button, shown as a **word** beneath the group: `suited` / `offsuit` (hole, `s`/`o`), `rainbow` / `mono` / `two tone` (flop, `r`/`m`/`tt`).
+- **Footnote** (ranks first, then suits) — suits are an *unassigned* note on the group ("one of these is a diamond, doesn't matter which"). Caption renders lowercase letters padded to N with `x`: `AJdx`, `Q53hhx`.
+- **Relationship** — an abstract texture from a shortcut button (hole `s`/`o`; flop `r`/`m`/`tt`). Caption renders the shorthand letters: `AKs`, `Q53tt`.
+
+**On-card display layer** (visual, *in addition to* the caption text, which is always kept):
+- **Bound** → the suit pip on each face.
+- **Footnote, all one suit** (e.g. `QJcc`, `Q53hhh`) → that suit colored on every face.
+- **Footnote, mixed/partial** (e.g. `♦♠`, `♦♦x`) → a **group texture pill** straddling the card row's bottom edge, glyphs colored for the dark pill.
+- **Relationship** → the same pill, showing the **word**: `suited` / `offsuit` / `mono` / `two-tone` / `rainbow`.
+- Principle: **a glyph = a real suit we know; a word = an abstract texture** — so spade `♠` and "suited" never collide.
 
 - **Explicit `x`** is a first-class card state distinct from a blank frame — pressing `x` shows the `x` immediately and reads `Jx` / `Qx`, even alone. A frame simply *left* unsuited renders bare unless a partner card carries a real suit, in which case it reads `x` too (`AhKx`).
 - **Two-tier, mutually-exclusive gating:** the suit buttons (`♠ ♥ ♦ ♣ x`) are live once the group has ≥1 rank, **unless** it is committed to a relationship; the relationship shortcuts are live only when **all** ranks are in and no specific suit has been chosen — and never for a **hole pair** (no `88s`; `88o` is assumed, never written). So at "both ranks, nothing chosen" both sets are live; the first suit turns the shortcuts off, the first shortcut turns the suits off.

@@ -1165,6 +1165,89 @@ struct HandEntryView: View {
         .animation(.easeInOut(duration: 0.25), value: currentStreet)
     }
 
+    /// When a footnote group is full and every entered letter is the SAME real suit (s/h/d/c — never
+    /// `x`), every card is unambiguously that suit. Returns the suit symbol to color the faces with;
+    /// nil otherwise (partial, mixed, or contains an explicit unknown). Display-only — see groupSection.
+    private func uniformFootnoteSuit(_ g: CardGroup) -> String? {
+        guard g.mode == .footnote, g.footnote.count == g.capacity else { return nil }
+        let letters = Set(g.footnote)
+        guard letters.count == 1, let letter = letters.first else { return nil }
+        switch letter {
+        case "s": return "♠"; case "h": return "♥"; case "d": return "♦"; case "c": return "♣"
+        default:  return nil          // "x" (explicit unknown) is not a suit
+        }
+    }
+
+    /// The frame to draw on a face: the real frame, or — for a uniform footnote — a copy with the
+    /// derived suit injected so the face renders a colored pip like a bound card (no model mutation).
+    private func faceFrame(_ frame: CardFrame, footnoteSuit: String?) -> CardFrame {
+        guard let s = footnoteSuit else { return frame }
+        var f = frame; f.suit = .known(s); return f
+    }
+
+    /// A partial footnote's suits as glyphs for the card bottom (Option D, repeated on each card):
+    /// the entered letters mapped to suit symbols, padded to capacity with "x". e.g. [d,s] → ["♦","♠"],
+    /// [h] (capacity 2) → ["♥","x"]. (The uniform-all-same case is shown on the faces instead.)
+    private func footnoteGlyphs(_ g: CardGroup) -> [String] {
+        var letters = g.footnote
+        while letters.count < g.capacity { letters.append("x") }
+        return letters.map { l in
+            switch l {
+            case "s": return "♠"; case "h": return "♥"; case "d": return "♦"; case "c": return "♣"
+            default:  return "x"
+            }
+        }
+    }
+
+    /// The relationship code (s/o/r/m/tt) spelled out for the badge. Words, not letters, so the
+    /// abstract texture is unmistakable and "suited" never collides with the spade glyph.
+    private func relationshipWord(_ code: String?) -> String? {
+        switch code {
+        case "s":  return "suited"
+        case "o":  return "offsuit"
+        case "r":  return "rainbow"
+        case "m":  return "mono"
+        case "tt": return "two-tone"
+        default:   return nil
+        }
+    }
+
+    /// The group texture pill (Style C): one dark, gold-bordered capsule straddling the bottom edge of
+    /// the card row. Holds either the relationship word (gold, one line) or the footnote glyph set
+    /// (red ♥♦ / light ♠♣ / muted x — colored for the dark pill). Content-sized and centered.
+    @ViewBuilder private func textureBadge(glyphSet: [String]?, relWord: String?) -> some View {
+        HStack(spacing: 5) {
+            if let word = relWord {
+                Text(word)
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(Color.goldLight)
+                    .lineLimit(1)
+            } else if let set = glyphSet {
+                ForEach(Array(set.enumerated()), id: \.offset) { _, sym in
+                    Text(sym)
+                        .font(.system(size: 12, weight: sym == "x" ? .bold : .regular))
+                        .foregroundStyle(badgeGlyphColor(sym))
+                }
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(Color(hex: "#222222")))
+        .overlay(Capsule().stroke(Color.gold, lineWidth: 0.5))
+        .fixedSize()
+    }
+
+    /// Suit-glyph colors tuned for the dark badge: red stays red, but spade/club go LIGHT (black would
+    /// vanish on the dark pill), and the unknown x is muted.
+    private func badgeGlyphColor(_ s: String) -> Color {
+        switch s {
+        case "♥", "♦": return Color(hex: "#E0524A")
+        case "♠", "♣": return Color(hex: "#EDEDED")
+        default:        return Color(hex: "#888888")   // x (unknown)
+        }
+    }
+
     /// A street group: rank-forward card faces, with a caption hanging beneath the group. The caption
     /// encodes the unassigned suit info — footnote letters (`dx`, `hhx`) or a relationship word
     /// (`suited`, `two tone`). Bound mode shows its suits ON the faces and has no caption. The caption
@@ -1173,6 +1256,16 @@ struct HandEntryView: View {
     private func groupSection(label: String, street: CardStreet, isActive: Bool) -> some View {
         let g = group(for: street)
         let anyKnown = g.frames.contains { $0.suit.knownSymbol != nil }
+        // A footnote whose every entered letter is the SAME real suit means we know each card's suit
+        // (QJcc, JThh, Q53hhh) — so color the faces, display-only. The mode stays .footnote and the
+        // caption is unchanged; the color simply disappears the moment the footnote stops being uniform.
+        let footnoteSuit = uniformFootnoteSuit(g)
+        // Group texture badge (additive — the text caption below is untouched). A non-uniform footnote
+        // shows its known suits as a glyph set; a relationship shows its word. One pill per group,
+        // straddling the bottom edge of the card row. Glyph = a real suit we know; word = an abstract
+        // texture. (bound / uniform-footnote stay on the faces; none → no pill.) See DisplayLayoutPlan.md.
+        let glyphSet: [String]? = (g.mode == .footnote && footnoteSuit == nil) ? footnoteGlyphs(g) : nil
+        let relWord: String? = (g.mode == .relationship) ? relationshipWord(g.relationship) : nil
         VStack(spacing: 6) {
             Text(label)
                 .font(.system(size: 9, weight: .bold))
@@ -1181,9 +1274,11 @@ struct HandEntryView: View {
 
             HStack(spacing: 4) {
                 ForEach(g.frames.indices, id: \.self) { i in
+                    // For uniform footnote, render the face with the derived suit injected so it draws the
+                    // colored pip exactly like a bound card (display-only — the model is untouched).
                     CardFrameView(
-                        frame: g.frames[i],
-                        showBoundSuit: g.mode == .bound,
+                        frame: faceFrame(g.frames[i], footnoteSuit: footnoteSuit),
+                        showBoundSuit: g.mode == .bound || footnoteSuit != nil,
                         // Show the grey "x" for an explicit unknown, or for a blank card whose partner
                         // already carries a real suit (the inferred AhKx case).
                         boundUnknown: g.mode == .bound &&
@@ -1199,6 +1294,12 @@ struct HandEntryView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(isActive ? Color.gold.opacity(0.45) : Color.clear, lineWidth: 1.5)
             )
+            .overlay(alignment: .bottom) {
+                if glyphSet != nil || relWord != nil {
+                    textureBadge(glyphSet: glyphSet, relWord: relWord)
+                        .offset(y: 9)   // straddle the bottom edge (tuning dial with the caption padding below)
+                }
+            }
 
             // Caption: the group's full shorthand in plain Courier text, shown once any suit info is
             // entered. The line is ALWAYS rendered (a blank space when ranks-only) so the strip keeps
@@ -1212,6 +1313,7 @@ struct HandEntryView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .frame(height: 20)
+                .padding(.top, 6)   // clearance for the straddling texture pill above
         }
     }
 
@@ -2162,6 +2264,9 @@ struct CardFrameView: View {
                     Text(frame.rank ?? "")
                         .font(.system(size: 16, weight: .black))
                         .foregroundStyle(rankColor)
+                    // Per-card suit pip: only in bound / uniform-footnote (showBoundSuit). Footnote-partial
+                    // and relationship are shown by the group pill (see groupSection), so the face is
+                    // rank-only there.
                     if showBoundSuit, let suit = frame.suit.knownSymbol {
                         Text(suit)
                             .font(.system(size: 9))

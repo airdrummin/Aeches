@@ -205,3 +205,27 @@ dock stays pinned to the bottom; no mid-screen void; no overflow at 844.
   and the dock height truly stays constant (no 1-frame jump).
 - **Two position-label paths** and **lossy card save** noted in `README.md` are unrelated to
   this refactor — do not touch.
+
+---
+
+## Addendum — on-card suit/texture display (separate feature, same screen)
+
+Implemented after the layout refactor. Display-only — no model/input/save changes. The card
+strip faces and a group "texture pill" now show suit info graphically, while the Courier
+**caption text is always kept** beneath the group (the on-card layer is additive).
+
+- **Bound** → suit pip on each face (existing).
+- **Footnote, all one suit** (`QJcc`, `Q53hhh`) → that suit colored on every face
+  (`uniformFootnoteSuit` + `faceFrame`, display-only; reverts the instant it's non-uniform).
+- **Footnote, mixed/partial** (`♦♠`, `♦♦x`) → a **group texture pill** straddling the card
+  row's bottom edge; glyphs colored for the dark pill (`badgeGlyphColor`).
+- **Relationship** → the same pill, showing the **word** (`suited` / `offsuit` / `mono` /
+  `two-tone` / `rainbow`), gold, one line.
+- Principle: **glyph = a real suit; word = an abstract texture** (so `♠` and "suited" never
+  collide).
+
+Key code: `groupSection` (`textureBadge` overlay), `CardFrameView` (faces only),
+`footnoteGlyphs` / `relationshipWord` / `uniformFootnoteSuit` helpers in `HandEntryView.swift`.
+
+Tuning dials: pill `offset(y: 9)` + caption `padding(.top, 6)` (straddle position vs caption
+clearance). `ShorthandReference.md` is unaffected — the text notation is unchanged.
