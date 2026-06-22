@@ -1350,6 +1350,32 @@ struct HandEntryView: View {
         return true
     }
 
+    /// Every fully-specified card (rank + a *bound* known suit) already in this hand, across all groups,
+    /// keyed `"As"` — excluding one frame (the cursor, so re-binding its own card never blocks itself).
+    /// Only bound frames carry a known per-card suit, so this is inherently "bound only": footnote and
+    /// relationship suits are unassigned and contribute nothing.
+    private func usedCardKeys(excluding street: CardStreet?, index: Int?) -> Set<String> {
+        var keys = Set<String>()
+        for (s, g) in [(CardStreet.hole, holeGroup), (.flop, flopGroup), (.turn, turnGroup), (.river, riverGroup)] {
+            for (i, f) in g.frames.enumerated() {
+                if s == street, i == index { continue }
+                if let r = f.rank, let sym = f.suit.knownSymbol { keys.insert(r + suitLetter(sym)) }
+            }
+        }
+        return keys
+    }
+
+    /// True when binding `suit` to the cursor card would re-create a card already in the hand — so the
+    /// suit button is disabled. Only fires on the bound path (a suit that appends to a footnote isn't a
+    /// concrete card and can't duplicate).
+    private func suitIsDuplicate(_ suit: String) -> Bool {
+        guard let street = entryStreet else { return false }
+        let g = group(for: street)
+        let willBind = g.mode == .bound || (g.mode == .none && (g.capacity == 1 || g.firstEmptyIndex != nil))
+        guard willBind, focusIndex < g.frames.count, let rank = g.frames[focusIndex].rank else { return false }
+        return usedCardKeys(excluding: street, index: focusIndex).contains(rank + suitLetter(suit))
+    }
+
     // Docked below the strip (not a covering sheet). The strip slots are the frames — they stay
     // visible and highlight the focused one — so the picker shows only the controls, no duplicate cards.
     private var cardPickerPanel: some View {
@@ -1459,8 +1485,9 @@ struct HandEntryView: View {
         }
     }
 
-    /// The suit-skinned board-count buttons for turn/river (`♥2 ♥3 ♥4` / `♥3 ♥4 ♥5`). They adopt the
-    /// chosen suit's glyph + color and are disabled until a real suit is set (an `x` can't be multiplied).
+    /// The suit-skinned board-count buttons for turn/river — `count` suit glyphs in the dice-like pip
+    /// layout (turn 2–4, river 3–5). They adopt the chosen suit's glyph + color and are disabled until a
+    /// real suit is set (an `x` can't be multiplied).
     @ViewBuilder
     private func multiplierSquares(for street: CardStreet) -> some View {
         let suitSym = entryGroup?.frames.first?.suit.knownSymbol
@@ -1475,15 +1502,11 @@ struct HandEntryView: View {
         let suitColor: Color = suitSymbol.map { ["♥", "♦"].contains($0) ? Color(hex: "#E0524A") : Color.white }
             ?? Color.textMuted
         return Button(action: { multiplierTapped(n) }) {
-            HStack(spacing: 1) {
-                Text(suitSymbol ?? "♠").font(.system(size: 14)).foregroundStyle(suitColor)
-                Text("\(n)").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.textBody)
-            }
-            .frame(height: 40)
-            .padding(.horizontal, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .stroke(selected ? Color.gold : Color.borderDark, lineWidth: selected ? 1.5 : 1))
+            SuitPips(symbol: suitSymbol ?? "♠", count: n, color: suitColor, glyphSize: 9)
+                .frame(width: 36, height: 40)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .stroke(selected ? Color.gold : Color.borderDark, lineWidth: selected ? 1.5 : 1))
         }
         .buttonStyle(.plain)
         .disabled(!active)
@@ -1653,7 +1676,9 @@ struct HandEntryView: View {
     /// A 34×40 suit square. Hearts/diamonds render red; spades/clubs white. Dimmed/disabled until the
     /// open group has at least one rank and isn't committed to a relationship (`suitsActive`).
     private func suitSquare(_ suit: String) -> some View {
-        Button(action: { suitTapped(suit) }) {
+        // Disabled when suits aren't live yet, OR when this exact card (rank+suit) is already in the hand.
+        let enabled = suitsActive && !suitIsDuplicate(suit)
+        return Button(action: { suitTapped(suit) }) {
             Text(suit)
                 .font(.system(size: 18))
                 .foregroundStyle(["♥", "♦"].contains(suit) ? Color(hex: "#E74C3C") : Color.white)
@@ -1663,8 +1688,8 @@ struct HandEntryView: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderDark, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .disabled(!suitsActive)
-        .opacity(suitsActive ? 1.0 : 0.35)
+        .disabled(!enabled)
+        .opacity(enabled ? 1.0 : 0.35)
     }
 
     /// The unknown-suit square — renders the shorthand marker "x" (e.g. Ax), suit left unrecorded.
@@ -2309,6 +2334,37 @@ struct CardGroup: Equatable {
     }
 }
 
+// MARK: - Suit Pips — N copies of a suit glyph in a dice-like layout (board count on turn/river)
+
+/// Arranges `count` suit glyphs in the same pip grammar as the seat raise-pips: 1 single, 2 side-by-
+/// side, 3 point-up triangle, 4 a 2×2, 5 a 2-1-2 quincunx. Shared by the card face and the ×N buttons.
+struct SuitPips: View {
+    let symbol: String
+    let count: Int
+    let color: Color
+    var glyphSize: CGFloat = 9
+
+    var body: some View {
+        VStack(spacing: 0) {
+            switch max(1, count) {
+            case 1:  row(1)
+            case 2:  row(2)
+            case 3:  row(1); row(2)
+            case 4:  row(2); row(2)
+            default: row(2); row(1); row(2)   // 5
+            }
+        }
+    }
+
+    private func row(_ n: Int) -> some View {
+        HStack(spacing: 1) {
+            ForEach(0..<n, id: \.self) { _ in
+                Text(symbol).font(.system(size: glyphSize)).foregroundStyle(color)
+            }
+        }
+    }
+}
+
 // MARK: - Card Frame View — compact card face (rank + bound suit / "x"), thin for the strip band
 
 struct CardFrameView: View {
@@ -2341,8 +2397,8 @@ struct CardFrameView: View {
                     // and relationship are shown by the group pill (see groupSection), so the face is
                     // rank-only there.
                     if showBoundSuit, let suit = frame.suit.knownSymbol {
-                        // One pip normally; turn/river repeat it by suitRun (board count) — sized down so
-                        // up to five fit the 40px card.
+                        // One pip normally; turn/river repeat it by suitRun (board count) in a row — sized
+                        // down so up to five fit the 40px card. (The pip *layout* is the picker button only.)
                         HStack(spacing: 1) {
                             ForEach(0..<max(1, suitRun), id: \.self) { _ in
                                 Text(suit).foregroundStyle(suitColor)
