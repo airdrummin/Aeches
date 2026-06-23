@@ -227,7 +227,8 @@ Undo returns the cue to the last actor (showing their action) **without deleting
 then undoes that action. Beyond that it peels the last action, crossing street boundaries and
 stripping system-generated auto-action batches in a single press. Undo is **reversible at hand
 close**: after a fold-out it re-opens recording and peels the fold; after a resolved showdown it
-re-opens the Win/Lose/Chop overlay to re-pick.
+re-opens the Win/Lose/Chop overlay to re-pick; after a **Skip** it restores recording to the exact
+point it was left without peeling any action (hand state was never cleared by Skip).
 
 **Dealing the next hand.** There is no New Hand button. From the closed state, tapping any seat
 places the dealer button there and deals the next hand (the same gesture as the first hand's button

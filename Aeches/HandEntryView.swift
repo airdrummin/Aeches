@@ -69,6 +69,8 @@ struct HandEntryView: View {
 
     // Hand-close state
     @State private var handCloseSummary: String = ""
+    // True from skipHand() until Undo or next deal: lets undoLastAction() restore without peeling an action.
+    @State private var lastHandWasSkipped: Bool = false
 
     @State private var phase: Phase = .selectSeat
 
@@ -98,16 +100,26 @@ struct HandEntryView: View {
     private let controlRegionHeight: CGFloat = 234
 
     private var feltActionText: String? {
-        guard phase == .recordingHand, !streetClosedDecisively, let seat = highlightedSeat else { return nil }
-        let pos = seatPositions[seat] ?? "?"
-        return "Action on \(pos)"
+        switch phase {
+        case .recordingHand where !streetClosedDecisively:
+            switch currentStreet {
+            case .preflop: return "PREFLOP"
+            case .flop:    return "FLOP"
+            case .turn:    return "TURN"
+            case .river:   return "RIVER"
+            }
+        case .handClosed where !handCloseSummary.isEmpty:
+            return handCloseSummary
+        default:
+            return nil
+        }
     }
 
     private var tableInstruction: String? {
         switch phase {
         case .selectSeat:    return "TAKE\nYOUR SEAT"
         case .placingButton: return "PLACE\nTHE BUTTON"
-        case .handClosed:    return "TAP A SEAT\nTO DEAL"
+        case .handClosed:    return "PLACE\nTHE BUTTON"
         default:             return nil
         }
     }
@@ -218,23 +230,19 @@ struct HandEntryView: View {
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
-                .padding(.bottom, 4)
-
-                // ── Status line ───────────────────────────────────────
-                statusLine
-                    .padding(.bottom, 6)
+                .padding(.bottom, 10)
 
                 // ── Table (top half) ──────────────────────────────────
                 TableOvalView(
                     tableSize: tableSize,
                     heroSeat: heroSeat,
-                    buttonSeat: buttonSeat,
-                    seatStates: seatActions,
+                    buttonSeat: phase == .handClosed ? nil : buttonSeat,
+                    seatStates: phase == .handClosed ? [:] : seatActions,
                     // On a decisive close the ring drops entirely (Option A) — the pulse hands off to
                     // the Next Street button. The data pointer (`highlightedSeat`) stays intact for
                     // tap/rewind logic; only the *visual* highlight is suppressed here.
                     activeSeat: streetClosedDecisively ? nil : highlightedSeat,
-                    positions: seatPositions,
+                    positions: phase == .handClosed ? [:] : seatPositions,
                     onSeatTap: handleSeatTap,
                     onSeatSwipe: handleSeatSwipe,
                     sizingStrip: sizingStrip(for:),
@@ -256,6 +264,20 @@ struct HandEntryView: View {
                     if phase == .showdown {
                         ShowdownOverlay(onResolve: resolveShowdown)
                             .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if phase == .recordingHand || phase == .showdown {
+                        tableActionButton("arrow.forward", "Skip", tint: Color.foldRed) { skipHand() }
+                            .padding(.leading, 14)
+                            .padding(.top, 10)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if isPlayingPhase {
+                        tableActionButton("arrow.left.and.right", "Move", tint: Color.textMuted) { moveSeat() }
+                            .padding(.trailing, 14)
+                            .padding(.top, 10)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -348,52 +370,6 @@ struct HandEntryView: View {
         .animation(.easeInOut(duration: 0.2), value: entryStreet != nil)
         .animation(.easeInOut(duration: 0.2), value: phase)
         .animation(.easeInOut(duration: 0.25), value: transcriptExpanded)
-    }
-
-    // MARK: - Status Line
-
-    @ViewBuilder private var statusLine: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(statusDotColor)
-                .frame(width: 6, height: 6)
-                .shadow(color: statusDotColor.opacity(0.8), radius: 4)
-            Text(statusText)
-                .font(.custom("Arial", size: 12))
-                .fontWeight(phase == .selectSeat ? .regular : .semibold)
-                .foregroundStyle(statusDotColor)
-        }
-    }
-
-    private var statusDotColor: Color {
-        switch phase {
-        case .selectSeat:    return Color.textMuted
-        case .placingButton: return Color.gold
-        case .recordingHand: return Color.winGreen
-        case .showdown:      return Color.gold
-        case .handClosed:
-            switch handCloseSummary {
-            case "You win":  return Color.winGreen
-            case "You lose": return Color.foldRed
-            case "Chop":     return Color.gold
-            default:         return Color.textMuted
-            }
-        }
-    }
-
-    private var statusText: String {
-        switch phase {
-        case .selectSeat:    return "Tap your seat to begin"
-        case .placingButton: return "Tap any seat to place the dealer button"
-        case .recordingHand:
-            if let btn = buttonSeat { return "Dealer: Seat \(btn + 1)  ·  Record action or fill in cards" }
-            return "Recording Hand #\(handNumber)"
-        case .showdown:      return "Showdown — select a winner"
-        case .handClosed:
-            return handCloseSummary.isEmpty
-                ? "Hand saved · Tap New Hand to continue"
-                : "\(handCloseSummary) · Tap New Hand to continue"
-        }
     }
 
     // MARK: - Seat Tap Handler
@@ -855,10 +831,20 @@ struct HandEntryView: View {
     /// untouched — rewind only affects recorded action.
     private func undoLastAction() {
         // A finished hand is reversible. Un-close it first, discriminating by the saved hand's
-        // outcome (showdown saves a non-nil outcome; a fold-out saves nil).
+        // outcome (showdown saves a non-nil outcome; a fold-out saves nil; a skip sets the flag).
         if phase == .handClosed {
             let popped = savedHands.popLast()
             handCloseSummary = ""
+            if lastHandWasSkipped {
+                // Skip undo: all hand state is still live (skipHand never called resetHandState).
+                // Just reverse the hand-number advance, clear the flag, and reopen recording.
+                // Do NOT fall through to the peel path — there is no erroneous action to remove.
+                lastHandWasSkipped = false
+                handNumber -= 1
+                phase = .recordingHand
+                highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
+                return
+            }
             if popped?.outcome != nil {
                 phase = .showdown        // re-open the Win/Lose/Chop overlay to re-pick — no peel
                 highlightedSeat = nil
@@ -2092,6 +2078,7 @@ struct HandEntryView: View {
         highlightedSeat = nil
         handCloseSummary = ""
         streetClosedDecisively = false
+        lastHandWasSkipped = false
     }
 
     private func saveCurrentHand(outcome: Outcome?) {
@@ -2127,6 +2114,60 @@ struct HandEntryView: View {
         activeSeatSequence = Array(0..<tableSize)
         highlightedSeat = firstActor(of: .preflop)
         phase = .recordingHand
+    }
+
+    /// Saves the current hand as incomplete (outcome: nil) and moves to handClosed without clearing
+    /// hand state — so Undo can fully restore recording. dealNextHand / moveSeat will reset when the
+    /// user actually moves on. Hand number increments; the skip flag lets undoLastAction skip the peel.
+    private func skipHand() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            saveCurrentHand(outcome: nil)
+            handNumber += 1
+            lastHandWasSkipped = true
+            highlightedSeat = nil
+            phase = .handClosed
+        }
+    }
+
+    /// Saves any in-progress hand as incomplete, increments the hand number, releases the hero seat,
+    /// and returns to seat selection. From handClosed (hand already saved) only increments and resets.
+    /// From placingButton (nothing started) just resets — no save, no increment.
+    private func moveSeat() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if phase == .recordingHand || phase == .showdown {
+                saveCurrentHand(outcome: nil)
+                handNumber += 1
+            } else if phase == .handClosed {
+                handNumber += 1
+            }
+            heroSeat = nil
+            resetHandState()
+            phase = .selectSeat
+        }
+    }
+
+    // MARK: - Table Utility Button
+
+    private func tableActionButton(_ icon: String, _ label: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(label)
+                    .font(.custom("Arial", size: 10))
+                    .fontWeight(.semibold)
+                    .tracking(0.3)
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Color.surface2.opacity(0.9))
+                    .overlay(Capsule().stroke(tint.opacity(0.25), lineWidth: 1))
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

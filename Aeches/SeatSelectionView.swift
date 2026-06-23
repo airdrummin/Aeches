@@ -188,18 +188,30 @@ struct TableOvalView: View {
                     .frame(width: rx * 1.52, height: ry * 1.52)
 
                 // ── HH watermark / phase instruction / action text ────
+                // When both instruction and actionText are provided (hand-closed phase: outcome above,
+                // tap-to-deal below), they stack. Otherwise each shows alone as before.
                 if let instruction {
-                    Pulse(isActive: true) { phase in
-                        Text(instruction)
-                            .font(.custom("Georgia", size: 20))
-                            .fontWeight(.black)
-                            .tracking(3)
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(Color.gold.opacity(0.65 + 0.17 * phase))
-                            .scaleEffect(1.0 + 0.02 * phase)
-                            .shadow(color: Color.gold.opacity(0.18 * phase), radius: 8)
-                            .shadow(color: Color.black.opacity(0.7), radius: 4)
-                            .transition(.opacity)
+                    VStack(spacing: 6) {
+                        if let actionText {
+                            Text(actionText)
+                                .font(.custom("Georgia", size: 11))
+                                .fontWeight(.semibold)
+                                .tracking(2)
+                                .foregroundStyle(Color.gold.opacity(0.55))
+                                .transition(.opacity)
+                        }
+                        Pulse(isActive: true) { phase in
+                            Text(instruction)
+                                .font(.custom("Georgia", size: 20))
+                                .fontWeight(.black)
+                                .tracking(3)
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(Color.gold.opacity(0.65 + 0.17 * phase))
+                                .scaleEffect(1.0 + 0.02 * phase)
+                                .shadow(color: Color.gold.opacity(0.18 * phase), radius: 8)
+                                .shadow(color: Color.black.opacity(0.7), radius: 4)
+                                .transition(.opacity)
+                        }
                     }
                 } else if let actionText {
                     Text(actionText)
