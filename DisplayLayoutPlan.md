@@ -1,8 +1,8 @@
 # Display Layout Refactor — Hand Entry Screen
 
-Authoritative plan for re-sizing and re-balancing the Record screen's vertical layout
-(table / card strip / control bar / card picker / transcript). Worked out in discussion;
-this file is the single reference. Implement in the phases below — nothing here is built yet.
+Authoritative reference for the Record screen's vertical layout (table / card strip / control bar /
+card picker / transcript) and the on-card suit display. **Phases 1–3 and the card-texture addendum
+are implemented** (see Implementation status below); the phase write-ups are kept as the rationale.
 
 Related: `README.md` (§ Core Feature: Hand Entry UI), `PokerActionReference.md`.
 Touches `Aeches/SeatSelectionView.swift` (table geometry) and `Aeches/HandEntryView.swift`

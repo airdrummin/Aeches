@@ -172,6 +172,17 @@ Card entry is **per-street group entry**, not slot-by-slot. Tapping any slot ope
 - Accepted notation: hole `AK`, `AKo`, `AKs`, `AhKs`, `AsKx`, footnote `AJdx`; flop `Q53r` / `Q53m` / `Q53tt` / `Qh5h3x` / footnote `Q53hhx`.
 - The trash icon clears the group; the slim grab handle (tap / swipe down) dismisses; **Next** (`›`) advances to the next bank (`✓` on the river).
 
+### Incognito Mode
+
+A session-wide privacy toggle for live play, so a neighbor at the table can't read the hero's hole cards. A single **eye toggle sits by the HOLE label** (faint when off, gold `eye.slash` when on). Hero-only — flop/turn/river are public board cards and are never hidden.
+
+When on:
+- **Hole faces** show a face-down card back (gold cross-hatch lattice + diamond crest); empty slots stay as the `?` placeholder.
+- **The hole caption is the single read-out** — readable while the hole bank is selected (tap your cards), blurred whenever it isn't. "Peek" is just re-selecting your cards; there is no separate peek control.
+- **The hole texture pill is omitted** (redundant with the caption text, and would leak the suits).
+
+*(Transcript masking — `Hero - UTG raise AJo` still shows the hand in plain text — is not yet implemented.)*
+
 ### Hand Shorthand Transcript
 
 A running **shorthand text** of the hand renders in the gap below the strip (the same zone the picker uses — they never show at once). It unfolds line-by-line as you record, in Courier, and a **Copy** button puts the full multi-line text on the clipboard to paste into a poker chat.
@@ -287,6 +298,10 @@ A running **shorthand text** of the hand renders in the gap below the strip (the
 - Hand outcome summary state with colored status dot and descriptive text; deal the next hand by tapping a seat to place the button (no New Hand button)
 - `handNumber` single source of truth — advances only when the next hand is dealt (tap a seat from the closed state)
 - Per-street card picker — docks in the gap below the strip (strip slots are the frames and the live preview); per-street `CardGroup`/`CardFrame` with one suit mode each — **bound** (`AdJx`, suit on the face), **footnote** (`AJdx`, unassigned suit letters in a caption), **relationship** (`suited`/`offsuit`/`rainbow`/`mono`/`two tone`). Left-to-right entry, explicit `x` as a first-class card state, mutually-exclusive suit/shortcut gating (pairs disable `s`/`o`), type-a-rank-clears-a-full-group, slim grab handle to dismiss, and a Next (`›`) control that advances bank-to-bank
+- On-card suit display — uniform-footnote faces colored; a group **texture pill** straddles the card row for partial footnote (glyph set) or relationship (word). Glyph = a real suit; word = a texture (see Card Entry)
+- Duplicate-card block — a suit button disables when binding it would recreate a fully-specified card already in the hand (bound-only; spans hole/flop/turn/river)
+- Turn/river **board-suit count** — repeat the suit to mark flush draws/completions (`4ss` / `4sss`), via suit re-tap or the suit-skinned pip-layout `×N` buttons (turn `2–4`, river `3–5`)
+- **Incognito mode** — session toggle (eye by the HOLE label) hides the hero's hole faces behind a card back and blurs the hole read-out; board cards stay public (see Incognito Mode)
 - Hand shorthand transcript — running Courier text of the hand in the same gap, a pure render of the action log with a Copy-to-clipboard button; grammar in `ShorthandReference.md`
 - Aggression symbols: → = post-flop bet; raise pip-layouts: ↑↑ side-by-side (2-bet), triangle (3-bet), 2×2 grid (4-bet), ↑ + badge number (5-bet+)
 - New Session screen (Cash / Tournament)
