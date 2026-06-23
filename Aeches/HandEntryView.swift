@@ -66,6 +66,7 @@ struct HandEntryView: View {
 
     // The bottom transcript: a 1-line sliver pinned at the bottom that expands up into the full hand.
     @State private var transcriptExpanded: Bool = false
+    @State private var transcriptCopied: Bool = false
 
     // Hand-close state
     @State private var handCloseSummary: String = ""
@@ -321,50 +322,51 @@ struct HandEntryView: View {
                 // the control bar + transcript while a card group is open (they never co-exist).
                 // See DisplayLayoutPlan.md §"Layout model".
                 if isPlayingPhase {
-                    cardStrip
-                        .padding(.top, 10)
+                    // ── Bottom assembly: card strip + control region, with the transcript drawer
+                    // overlaid on this section only — it never covers the table above the divider.
+                    ZStack(alignment: .bottom) {
+                        VStack(spacing: 0) {
+                            cardStrip
+                                .padding(.top, 10)
 
-                    Group {
-                        if entryStreet != nil {
-                            cardPickerPanel
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                        } else {
-                            VStack(spacing: 0) {
-                                ControlBar(
-                                    isRecording: phase == .recordingHand,
-                                    currentStreet: currentStreet,
-                                    openBetExists: openBetExists,
-                                    highlightedSeat: highlightedSeat,
-                                    rewindEnabled: rewindButtonEnabled,
-                                    nextStreetEnabled: nextStreetButtonEnabled,
-                                    nextStreetPulsing: streetClosedDecisively,
-                                    nextStreetLabel: nextStreetLabel,
-                                    onAction: { commitAction($0) },
-                                    onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
-                                    onNextStreet: handleNextStreet
-                                )
-                                // Fills the region beneath the control bar — 3–5 lines, scrolls to the
-                                // newest action; the full hand is the expand drawer.
-                                transcriptInline
+                            Group {
+                                if entryStreet != nil {
+                                    cardPickerPanel
+                                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                                } else {
+                                    VStack(spacing: 0) {
+                                        ControlBar(
+                                            isRecording: phase == .recordingHand,
+                                            currentStreet: currentStreet,
+                                            openBetExists: openBetExists,
+                                            highlightedSeat: highlightedSeat,
+                                            rewindEnabled: rewindButtonEnabled,
+                                            nextStreetEnabled: nextStreetButtonEnabled,
+                                            nextStreetPulsing: streetClosedDecisively,
+                                            nextStreetLabel: nextStreetLabel,
+                                            onAction: { commitAction($0) },
+                                            onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
+                                            onNextStreet: handleNextStreet
+                                        )
+                                        // Fills the region beneath the control bar — 3–5 lines, scrolls to the
+                                        // newest action; the full hand is the expand drawer.
+                                        transcriptInline
+                                    }
+                                }
                             }
+                            .frame(height: controlRegionHeight)
+                        }
+
+                        // Drawer slides up to cover only this bottom section (cards + control region).
+                        // The table above the divider stays fully visible and interactive.
+                        if transcriptExpanded {
+                            transcriptDrawer
+                                .transition(.move(edge: .bottom))
                         }
                     }
-                    .frame(height: controlRegionHeight)
                 } else {
                     Spacer(minLength: 0)
                 }
-            }
-
-            // ── Transcript drawer — slides up from the sliver to show the full hand. The dim
-            // backdrop (tap to collapse) sits behind it; the system tab bar stays on top.
-            if transcriptExpanded {
-                Color.black.opacity(0.55).ignoresSafeArea()
-                    .onTapGesture { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = false } }
-                VStack(spacing: 0) {
-                    Spacer(minLength: 120)
-                    transcriptDrawer
-                }
-                .transition(.move(edge: .bottom))
             }
         }
         .animation(.easeInOut(duration: 0.2), value: entryStreet != nil)
@@ -1113,9 +1115,12 @@ struct HandEntryView: View {
 
     private func positionFor(seat: Int) -> String {
         guard let btn = buttonSeat else { return "?" }
+        // Use the full table ring so positions are stable even after players fold.
+        // Using activeSeatSequence here would exclude a folded BTN, causing calculatePositions
+        // to return [:] and every post-flop position to render as "?".
         return calculatePositions(
             buttonSeatIndex: btn,
-            activeSeatIndices: activeSeatSequence
+            activeSeatIndices: Array(0..<tableSize)
         )[seat] ?? "?"
     }
 
@@ -1574,22 +1579,35 @@ struct HandEntryView: View {
     private var transcriptInline: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Button(action: { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = true } }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.up").font(.system(size: 10, weight: .bold))
-                        Text("HAND").font(.system(size: 10, weight: .bold)).tracking(1.5)
-                    }
+                Text("HAND HISTORY")
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(1.5)
                     .foregroundStyle(Color.gold)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
                 Spacer()
                 Button(action: copyShorthand) {
-                    Image(systemName: "doc.on.doc").font(.system(size: 12)).foregroundStyle(Color.gold)
+                    HStack(spacing: 4) {
+                        Image(systemName: transcriptCopied ? "checkmark" : "doc.on.doc").font(.system(size: 11))
+                        Text(transcriptCopied ? "Copied" : "")
+                            .font(.custom("Arial", size: 11))
+                            .opacity(transcriptCopied ? 1 : 0)
+                    }
+                    .foregroundStyle(transcriptCopied ? Color.winGreen : Color.gold)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .overlay(Capsule().stroke(transcriptCopied ? Color.winGreen.opacity(0.4) : Color.clear, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 .disabled(handShorthand.isEmpty)
                 .opacity(handShorthand.isEmpty ? 0.35 : 1.0)
+                Button(action: { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = true } }) {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.gold)
+                        .padding(.leading, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 16)
             .padding(.top, 7)
@@ -1623,22 +1641,23 @@ struct HandEntryView: View {
     private var transcriptDrawer: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("HAND")
+                Text("HAND HISTORY")
                     .font(.system(size: 11, weight: .bold))
                     .tracking(2)
                     .foregroundStyle(Color.gold)
                 Spacer()
                 Button(action: copyShorthand) {
                     HStack(spacing: 4) {
-                        Image(systemName: "doc.on.doc").font(.system(size: 12))
-                        Text("Copy").font(.custom("Arial", size: 13))
+                        Image(systemName: transcriptCopied ? "checkmark" : "doc.on.doc").font(.system(size: 12))
+                        Text(transcriptCopied ? "Copied" : "Copy").font(.custom("Arial", size: 13))
                     }
-                    .foregroundStyle(Color.textBody)
+                    .foregroundStyle(transcriptCopied ? Color.winGreen : Color.textBody)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .overlay(Capsule().stroke(Color.borderDark, lineWidth: 1))
+                    .overlay(Capsule().stroke(transcriptCopied ? Color.winGreen.opacity(0.4) : Color.borderDark, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 Button(action: { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = false } }) {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 15, weight: .bold))
@@ -1675,6 +1694,11 @@ struct HandEntryView: View {
 
     private func copyShorthand() {
         UIPasteboard.general.string = handShorthand
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.easeInOut(duration: 0.15)) { transcriptCopied = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeInOut(duration: 0.15)) { transcriptCopied = false }
+        }
     }
 
     @ViewBuilder
@@ -1968,11 +1992,23 @@ struct HandEntryView: View {
     /// Computed (like `seatActions`) so it tracks Rewind/edits automatically.
     private var handShorthand: String {
         let hero = heroSeat ?? -1
+        var lines: [String] = []
+
+        // Header: Hand #N - [cards] - [position], building from what is currently known.
+        var header = "Hand #\(handNumber)"
+        if let btn = buttonSeat, hero >= 0 {
+            let pos = calculatePositions(buttonSeatIndex: btn,
+                                         activeSeatIndices: Array(0..<tableSize))[hero] ?? ""
+            let cards = groupNotation(.hole)
+            if !pos.isEmpty {
+                header += cards.isEmpty ? " - \(pos)" : " - \(cards) - \(pos)"
+            }
+        }
+        lines.append(header)
+        lines.append("")   // blank line separates the header from the action lines
+
         let order: [StreetName] = [.preflop, .flop, .turn, .river]
         let currentIdx = order.firstIndex(of: currentStreet) ?? 0
-
-        var lines: [String] = []
-        var heroDeclared = false
 
         for street in order.prefix(currentIdx + 1) {
             let acts = actions(on: street)
@@ -1980,29 +2016,35 @@ struct HandEntryView: View {
             if acts.isEmpty && board.isEmpty { continue }
 
             var segments: [String] = []
-            if !board.isEmpty { segments.append(board) }   // bare board leads post-flop lines
+            if !board.isEmpty { segments.append(board) }
 
             let isPreflop = (street == .preflop)
-            if !acts.isEmpty && acts.allSatisfy({ $0.actionType == .check }) {
-                // Pure check-around → bare checks, no names.
-                segments.append(acts.map { _ in "chk" }.joined(separator: " "))
-            } else {
-                var aggCount = 0
-                var sawAgg = false
-                for a in acts {
-                    let isAgg = (a.actionType == .open || a.actionType == .raise)
-                    if isAgg { aggCount += 1 }
-                    let token = actionToken(a, isPreflop: isPreflop, aggIndex: aggCount, priorAggression: sawAgg)
-                    if isAgg { sawAgg = true }
-                    segments.append(actorSegment(a, token: token, hero: hero, heroDeclared: &heroDeclared))
+            var aggCount = 0
+            var sawAgg = false
+            var pairs: [(actor: String, token: String)] = []
+
+            for a in acts {
+                // Preflop: suppress a fold if it is that player's only action on this street —
+                // they were never voluntarily in the hand (pure pre-action folder).
+                if isPreflop && a.actionType == .fold {
+                    let seatActs = acts.filter { $0.seatIndex == a.seatIndex }
+                    if seatActs.count == 1 { continue }
                 }
+
+                let isAgg = (a.actionType == .open || a.actionType == .raise)
+                if isAgg { aggCount += 1 }
+                let token = actionToken(a, isPreflop: isPreflop, aggIndex: aggCount, priorAggression: sawAgg)
+                if isAgg { sawAgg = true }
+
+                let actor = (a.seatIndex == hero) ? "Hero" : a.position
+                pairs.append((actor: actor, token: token))
             }
 
+            segments += collapsedSegments(pairs)
             if !segments.isEmpty { lines.append(segments.joined(separator: ". ") + ".") }
         }
 
-        // Showdown gets a result line (the outcome isn't derivable from the action); a fold-out implies
-        // the winner with no tag. savedHands.last carries this hand's outcome at close (nil = fold-out).
+        // Showdown result line (fold-out has no tag — the final fold ends it).
         if phase == .handClosed, let outcome = savedHands.last?.outcome {
             switch outcome {
             case .win:  lines.append("Hero wins.")
@@ -2012,6 +2054,30 @@ struct HandEntryView: View {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// Collapses consecutive (actor, token) pairs that share the same token into
+    /// "A & B verb" or "A, B & C verb" entries. Non-consecutive same-token pairs
+    /// are not collapsed.
+    private func collapsedSegments(_ pairs: [(actor: String, token: String)]) -> [String] {
+        var result: [String] = []
+        var i = 0
+        while i < pairs.count {
+            let token = pairs[i].token
+            var group = [pairs[i].actor]
+            while i + 1 < pairs.count && pairs[i + 1].token == token {
+                i += 1
+                group.append(pairs[i].actor)
+            }
+            if group.count == 1 {
+                result.append("\(group[0]) \(token)")
+            } else {
+                let joined = group.dropLast().joined(separator: ", ") + " & " + group.last!
+                result.append("\(joined) \(token)")
+            }
+            i += 1
+        }
+        return result
     }
 
     /// Recorded actions on a street: completed streets live in `streets`, the live one in `actionsThisStreet`.
@@ -2042,18 +2108,14 @@ struct HandEntryView: View {
             return isPreflop ? "raise" : "bet"
         case .raise:
             if let label = a.sizing?.label { return label == "All-in" ? "jam" : label }
-            return isPreflop ? "\(aggIndex + 1)-bet" : "raise"   // 1st reraise (aggIndex 2) → 3-bet
+            if isPreflop {
+                // The Raise action button always records .raise (even for an open). aggIndex == 1
+                // means this is the first aggressive action on the street → open raise → "raise".
+                // aggIndex 2+ is a genuine re-raise: first re-raise → "3b", next → "4b", etc.
+                return aggIndex <= 1 ? "raise" : "\(aggIndex + 1)b"
+            }
+            return "raise"
         }
-    }
-
-    /// "<actor> <token>", declaring Hero once (with position + hole cards) at Hero's first action.
-    private func actorSegment(_ a: Action, token: String, hero: Int, heroDeclared: inout Bool) -> String {
-        guard a.seatIndex == hero else { return "\(a.position) \(token)" }
-        if heroDeclared { return "Hero \(token)" }
-        heroDeclared = true
-        let cards = groupNotation(.hole)
-        let base = "Hero - \(a.position) \(token)"
-        return cards.isEmpty ? base : "\(base) \(cards)"
     }
 
     // MARK: - Hand Lifecycle

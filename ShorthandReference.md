@@ -89,26 +89,41 @@ flush on the river). A plain single suit (`4s`) is unchanged.
 ---
 
 ## 3. Positions
-Frozen on each `Action` at record time (via `calculatePositions`):
-`UTG, UTG+1, UTG+2, UTG+3, LJ, HJ, CO, BTN, SB, BB`. (6-max: `UTG HJ CO BTN SB BB`.)
+Frozen on each `Action` at record time (via `calculatePositions`), always using the **full table ring**
+so labels are stable throughout the hand even as players fold:
+`UTG, UTG+1, UTG+2, UTG+3, MP, MP+1, MP+2, HJ, CO, BTN, SB, BB`.
 
 ---
 
-## 4. Who is who (Decision A)
+## 4. Header line
 
-- **Hero** is declared once, at Hero's **first action**, as `Hero - <POS>`, with **hole cards** attached at
-  that first mention. After that, just `Hero`.
-  - `Hero - UTG raise AJo` (hero opens first) … later `Hero chk`.
-  - If hero acts later in the line, the declaration appears there: `UTG raise. CO call. Hero - BB call AJo.`
-- **Villains** are written by **position** throughout: `BTN call`, `CO 3-bet`. (Positions are unique per
-  hand, so no disambiguation is needed even multiway.)
+Every transcript opens with a header derived from what is currently known:
 
-Hole cards sit **after** the opening verb/size on the declaration (`raise AJo`, or `2.5x AJo` when the open
-was sized).
+```
+Hand #N - [hole cards] - [hero position]
+```
+
+- **Hand number** is always present.
+- **Hero position** is added once the dealer button is placed (position is button-relative).
+- **Hole cards** are added once entered; they appear between the hand number and the position.
+- If cards are not yet entered: `Hand #3 - CO`
+- If cards are entered: `Hand #3 - JTss - CO`
+
+Hero's position and hole cards are **declared once in the header only**. They do not appear again
+in the action lines.
 
 ---
 
-## 5. Action verbs (Decision A — elision)
+## 5. Who is who
+
+- **Hero** is written as `Hero` throughout all action lines. No inline position/card declaration —
+  that information lives in the header (§4).
+- **Villains** are written by **position** throughout: `BTN call`, `CO raise`. Positions are unique
+  per hand, so no disambiguation is needed even multiway.
+
+---
+
+## 6. Action verbs
 
 Base verbs by `ActionType` and street:
 
@@ -118,19 +133,24 @@ Base verbs by `ActionType` and street:
 | `.check` | `chk`  | `chk`  |
 | `.call`  | `call` — **but** an unraised first-in call renders `limp` (Decision C) | `call` |
 | `.open`  | `raise` (the open) | `bet` |
-| `.raise` | `3-bet` / `4-bet` / `5-bet` by `betLevelThisStreet` | `raise` |
+| `.raise` | `3b` / `4b` / `5b` … by running aggression count | `raise` |
+
+**Re-raise level notation (preflop `.raise` only):**
+The running aggressive-action count (`aggIndex`) determines the label. The first `.open` is always
+`raise`; subsequent `.raise` actions increment the count: first re-raise → `3b`, second → `4b`,
+third → `5b`, etc. There is no `2b` label — an open raise is always `raise`.
 
 **Verb elision (applies to everyone — Hero and villains — and to both bet and raise):**
 - When a wager carries a **size**, drop the verb and show **just the size**: `Hero 30%`, `BTN 2.2x`,
   `CO 9bb`. Both bet and raise elide; context (is there already a bet this street?) tells which.
-- An **unsized** wager keeps its verb: `Hero bet`, `BTN 3-bet`, `Hero raise`.
+- An **unsized** wager keeps its verb: `Hero bet`, `BTN 3b`, `Hero raise`.
 - Non-wager actions **always** keep their word: `chk`, `call`, `limp`, `fold`.
 - All-in arrives as the sizing label `All-in` → render the **verb** `jam`, no trailing size.
 
 ---
 
-## 6. Bet sizing
-Append the size after the verb, or use it alone under elision (§5). Read `sizing.label` straight through
+## 7. Bet sizing
+Append the size after the verb, or use it alone under elision (§6). Read `sizing.label` straight through
 when present; omit when nil (never invent a size):
 - Pot fraction → `30%`, `90%`
 - Multiple → `2.2x`, `3x`
@@ -140,25 +160,42 @@ when present; omit when nil (never invent a size):
 
 ---
 
-## 7. Line structure (Decisions B, E)
+## 8. Line structure
 
-**One line per street. Bare board, no street word.** Each post-preflop line leads with the board token(s),
-then actions in log order, period-separated. The **preflop line has no board** and leads with the first
-action (where Hero's declaration falls if Hero acts there). Streets never reached are absent.
+**Header first, then one line per street.** Each post-preflop street line leads with the bare board
+token, then actions in log order, period-separated. The preflop line has no board. Streets never
+reached are absent.
 
-**Check-arounds collapse:** a street where **every action is a check** drops the names — `chk chk` (one per
-checker, in action order). The moment a street contains any wager, **every** action on it keeps its actor.
+**Preflop fold suppression.** On the preflop line, a player whose **only** recorded action is a fold
+is omitted entirely. This covers:
+- Players who fold before acting voluntarily (UTG folds, SB folds without limping).
+- BB folding to a raise (their only recorded action is the fold — the blind post is not an action).
+
+A fold IS shown when the player took any prior voluntary action on the street (limped then faced a
+raise and folded; raised then faced a re-raise and folded).
+
+**Every action is named.** Each action on every street includes the actor's name (`BB chk`, `Hero bet`).
+There is no anonymous check-around collapse.
+
+**Same-action collapse.** When consecutive actors in the log take the same action (same rendered
+token), they are joined into one entry:
+- Two players: `HJ & Hero call`
+- Three or more: `UTG, HJ & Hero call`
+
+Collapse applies on all streets including preflop, and to all action types including checks
+(`BB & Hero chk`). Non-consecutive same-token entries are not collapsed.
 
 ```
-Hero - UTG raise AJo. BTN call.
-Q53r. Hero chk. BTN 30%. Hero 2.2x. BTN call.
-Jh. chk chk.
-5x. Hero 90%. BTN fold.
+Hand #3 - JTss - CO
+HJ raise. Hero call. BB 3b. HJ & Hero call.
+QQJhhx. BB bet. HJ fold. Hero call.
+5x. BB & Hero chk.
+9d. BB bet. Hero call.
 ```
 
 ---
 
-## 8. Hand close (Decision D)
+## 9. Hand close
 
 - **Fold-out:** ends on the final `fold` — **no winner tag**. The last player standing is implied.
 - **Showdown:** the outcome isn't derivable from the action, so append a **minimal result line** from the
@@ -167,75 +204,101 @@ Jh. chk chk.
 
 ---
 
-## 9. Worked examples (final style)
+## 10. Worked examples (final style)
 
-**A — single-raised, heads-up to showdown:**
+**A — single-raised pot, heads-up to showdown:**
 ```
-Hero - UTG raise AJo. BTN call.
-Q53r. Hero chk. BTN 30%. Hero 2.2x. BTN call.
-Jh. chk chk.
-5x. Hero 90%. BTN fold.
+Hand #1 - AJo - UTG
+UTG raise. BTN call.
+Q53r. Hero bet. BTN 2.2x. Hero call.
+Jh. Hero chk. BTN 30%. Hero fold.
 ```
 
-**B — 3-bet pot, multiway preflop, two-tone flop, hero not first to act post-flop:**
+**B — 3b pot, multiway preflop, two-tone flop:**
 ```
-Hero - CO raise AhKh. BTN call. SB 3-bet. Hero call. BTN fold.
+Hand #2 - AhKh - CO
+Hero raise. BTN call. SB 3b. Hero & BTN call.
 Qh5h3x. SB 33%. Hero call.
 2c. SB chk. Hero 60%. SB fold.
-```
-
-**C — limped pot, monotone flop, jam, runout checks, showdown:**
-```
-Hero - BB chk 88. UTG limp. CO limp.
-9c4c2c. Hero 50%. CO jam. BTN fold. Hero call.
-Kx. River Tx.    (no wagers after the jam-call; cards only)
 Hero wins.
 ```
-> Note: once two players are all-in, later streets are just board cards with no actions — render the bare
-> board tokens (`Kx`, `Tx`) on their lines, then the showdown result.
 
-**D — preflop fold-out (no flop, no tag):**
+**C — limped pot, monotone flop, jam, runout, showdown:**
 ```
-Hero - HJ raise KQs. CO 3-bet. BTN cold-4-bet. Hero fold. CO fold.
+Hand #3 - 88 - BB
+UTG limp. CO limp. Hero chk.
+9c4c2c. Hero 50%. CO jam. Hero call.
+Kx.
+Tx.
+Hero wins.
+```
+> Once two players are all-in, later streets are just board cards — render the bare board token on
+> its line, then the showdown result.
+
+**D — preflop fold-out (villain folds on the river):**
+```
+Hand #4 - KQs - HJ
+Hero raise. CO 3b. Hero call.
+Js7s2h. Hero chk. CO 33%. Hero call.
+4s. Hero chk. CO bet. Hero raise. CO fold.
 ```
 
-**E — sized open (elided), hero in the blinds:**
+**E — sized open (elided), preflop fold-out:**
 ```
-UTG raise. CO call. Hero - BB 4bb AQs. UTG fold. CO call.
+Hand #5 - AQs - BB
+UTG raise. CO call. Hero 4bb. UTG fold. CO call.
 Js7s2h. Hero 33%. CO call.
 ...
 ```
 
 ---
 
-## 10. Style decisions (locked)
+## 11. Style decisions (locked)
 
-- **A. Hero label:** `Hero - <POS>` declared once at Hero's first action + hole cards there; `Hero` after.
-  Villains by position.
-- **A. Verb elision:** sized wager → bare size for **everyone**, bet **and** raise; unsized wager keeps the
-  verb; `chk`/`call`/`limp`/`fold` always keep their word.
-- **B. Check-arounds:** a pure all-check street collapses to bare `chk chk`; any street with a wager keeps
-  every actor's name.
-- **C. Limp:** an unraised first-in preflop call renders `limp`; a call facing a raise is `call`.
-- **D. Fold-out:** no winner tag — the final `fold` ends it. Showdowns get a minimal result line.
-- **E. Board labels:** bare board tokens lead each street line; no `Flop`/`Turn`/`River` word.
+- **A. Header:** `Hand #N - [cards] - [position]` always leads. Hero position and hole cards declared
+  there only — never inline in the action text. Cards slot in once entered; position slots in once
+  button is placed.
+- **B. Hero label:** `Hero` always, in all action lines. No "Hero - CO" inline declaration.
+- **C. Villain label:** position throughout (`BTN`, `HJ`, etc.). Position is stable for the full
+  hand — frozen using the full table ring at record time, not recalculated as players fold.
+- **D. Verb elision:** sized wager → bare size for **everyone**, bet **and** raise; unsized wager
+  keeps the verb; `chk`/`call`/`limp`/`fold` always keep their word.
+- **E. Re-raise notation:** `3b` / `4b` / `5b` for preflop re-raises. No `2b` — an open is always
+  `raise`. No long-form `3-bet`/`4-bet`.
+- **F. Preflop fold suppression:** omit any player whose only preflop action is a fold.
+- **G. Named actors always:** every action on every street includes the actor's name.
+- **H. Same-action collapse:** consecutive actors with the same rendered token collapse into a
+  single entry joined by `&` (and `,` for three or more).
+- **I. Check-around:** no special case — follows the named-actors and collapse rules like any other
+  street. A two-player check-around reads `A & B chk.`
+- **J. Limp:** an unraised first-in preflop call renders `limp`; a call facing a raise is `call`.
+- **K. Fold-out:** no winner tag — the final `fold` ends it. Showdowns get a minimal result line.
+- **L. Board labels:** bare board tokens lead each street line; no `Flop`/`Turn`/`River` word.
 
 ---
 
-## 11. Implementation notes
+## 12. Implementation notes
 
 - **Pure function over the log.** Input: `streets`, `actionsThisStreet`, the four card-slot groups,
-  `heroSeat`, each `Action`'s frozen `position` + `sizing.label`. Output: the multi-line string. No new
-  `@State` — render it like `seatActions` (a computed property) so it tracks Rewind/edits for free.
-- **Verb dispatch** keys on `actionType` + street (preflop vs post-flop) + `betLevelThisStreet` for
-  3-bet/4-bet naming — the same signals the seat-symbol layer uses, so the two stay consistent.
+  `heroSeat`, `handNumber`, `buttonSeat`, each `Action`'s frozen `position` + `sizing.label`.
+  Output: the multi-line string. No new `@State` — computed like `seatActions` so it tracks
+  Rewind/edits for free.
+- **Header** is built first: `Hand #N`, then append ` - [pos]` once `buttonSeat` is set, then
+  insert cards once `groupNotation(.hole)` is non-empty.
+- **Position stability.** `positionFor(seat:)` always calls `calculatePositions` with
+  `Array(0..<tableSize)` — never `activeSeatSequence`. This prevents the folded-BTN bug where
+  `calculatePositions` returns `[:]` and every post-flop position resolves to `"?"`.
+- **Preflop fold filter.** Before building pairs for the preflop street, skip any action where
+  `actionType == .fold` AND that seat has exactly one action on the preflop street.
+- **Verb dispatch** keys on `actionType` + street (preflop vs post-flop) + running `aggCount` for
+  re-raise level — the same signals the seat-symbol layer uses, so the two stay consistent.
 - **Elision** checks `sizing != nil`: present → emit the label alone; absent → emit the base verb.
-- **Check-around collapse** is per-street: if every action on a street is `.check`, emit `chk` per action
-  with no actor prefix; otherwise prefix every action.
-- **Hero declaration** is emitted at the first action whose `seatIndex == heroSeat`; hole cards come from
-  the hero card slots, formatted per §2.
-- **Card tokens** are the same notation the picker writes — one formatter serves both the slots' display and
-  the transcript.
-- **The transcript panel** renders this in Courier New, auto-scrolls to the last line, and exposes Copy
-  (copies the full multi-line string).
+- **Same-action collapse** (`collapsedSegments`): iterate pairs; accumulate a run while the next
+  pair's token matches; emit the joined actor string + token; advance.
+- **Hero** in all action lines is just `"Hero"` — no position or card suffix. The header carries
+  those once.
+- **Card tokens** are the same notation the picker writes — one formatter serves both the slots'
+  display and the transcript.
+- **The transcript panel** renders this in Courier New, auto-scrolls to the last line, and exposes
+  Copy (copies the full multi-line string).
 - **No silent invention:** missing size → omit; missing suit → `x`.
