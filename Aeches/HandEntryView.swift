@@ -59,6 +59,11 @@ struct HandEntryView: View {
     @State private var focusIndex: Int = 0
     @State private var entryLocked: Bool = false
 
+    // Incognito mode (session-wide): hide the HERO's hole-card faces (show card backs) so a neighbor at
+    // the table can't read them. The hole caption is readable while the hole bank is selected and blurs
+    // otherwise — so "peek" is just re-selecting your cards. Board cards are public, never hidden.
+    @State private var incognito = false
+
     // The bottom transcript: a 1-line sliver pinned at the bottom that expands up into the full hand.
     @State private var transcriptExpanded: Bool = false
 
@@ -1248,6 +1253,29 @@ struct HandEntryView: View {
         }
     }
 
+    /// The group's label row. Hole carries the incognito eye toggle (session-wide) right beside it —
+    /// the one place to flip hole-card privacy on/off; other streets are just the label.
+    @ViewBuilder
+    private func groupLabel(_ label: String, street: CardStreet, isActive: Bool) -> some View {
+        let title = Text(label)
+            .font(.system(size: 9, weight: .bold))
+            .tracking(1.5)
+            .foregroundStyle(isActive ? Color.gold : Color.textMuted)
+        if street == .hole {
+            HStack(spacing: 5) {
+                title
+                Button(action: { incognito.toggle() }) {
+                    Image(systemName: incognito ? "eye.slash" : "eye")
+                        .font(.system(size: 11))
+                        .foregroundStyle(incognito ? Color.gold : Color.textMuted.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+            }
+        } else {
+            title
+        }
+    }
+
     /// A street group: rank-forward card faces, with a caption hanging beneath the group. The caption
     /// encodes the unassigned suit info — footnote letters (`dx`, `hhx`) or a relationship word
     /// (`suited`, `two tone`). Bound mode shows its suits ON the faces and has no caption. The caption
@@ -1266,11 +1294,12 @@ struct HandEntryView: View {
         // texture. (bound / uniform-footnote stay on the faces; none → no pill.) See DisplayLayoutPlan.md.
         let glyphSet: [String]? = (g.mode == .footnote && footnoteSuit == nil) ? footnoteGlyphs(g) : nil
         let relWord: String? = (g.mode == .relationship) ? relationshipWord(g.relationship) : nil
+        let faceDown = incognito && street == .hole   // incognito hides only the hero's hole faces
+        // In incognito the hole's caption is the single read-out (the pill is omitted, below). The caption
+        // blurs whenever the hole bank isn't selected, and clears again when you re-select your cards.
+        let hideReadouts = faceDown && entryStreet != .hole
         VStack(spacing: 6) {
-            Text(label)
-                .font(.system(size: 9, weight: .bold))
-                .tracking(1.5)
-                .foregroundStyle(isActive ? Color.gold : Color.textMuted)
+            groupLabel(label, street: street, isActive: isActive)
 
             HStack(spacing: 4) {
                 ForEach(g.frames.indices, id: \.self) { i in
@@ -1284,6 +1313,7 @@ struct HandEntryView: View {
                         boundUnknown: g.mode == .bound &&
                             (g.frames[i].suit == .unknown || (g.frames[i].suit == .unspecified && anyKnown)),
                         suitRun: g.suitRun,   // turn/river board count → repeated pips (1 elsewhere)
+                        faceDown: faceDown,
                         isActive: entryStreet == street && focusIndex == i
                     )
                     .onTapGesture { openCardEntry(street) }
@@ -1296,17 +1326,22 @@ struct HandEntryView: View {
                     .stroke(isActive ? Color.gold.opacity(0.45) : Color.clear, lineWidth: 1.5)
             )
             .overlay(alignment: .bottom) {
-                if glyphSet != nil || relWord != nil {
+                // In incognito the pill is omitted entirely on the hole — it's redundant with the caption
+                // text and would leak the suits. The text caption (below) is the single hole read-out.
+                if (glyphSet != nil || relWord != nil) && !faceDown {
                     textureBadge(glyphSet: glyphSet, relWord: relWord)
                         .offset(y: 9)   // straddle the bottom edge (tuning dial with the caption padding below)
                 }
             }
 
-            // Caption: the group's full shorthand in plain Courier text, shown once any suit info is
-            // entered. The line is ALWAYS rendered (a blank space when ranks-only) so the strip keeps
-            // a constant height — the picker never slides as you type the suits in. A bare ranks-only
-            // group prints a space, so it doesn't echo the faces.
-            Text(g.mode != .none ? groupNotation(street) : " ")
+            // Caption: the group's full shorthand in plain Courier text, shown as soon as ANY rank is
+            // entered (groupNotation renders ranks-only too — "5", "55" — then fills in suits). The line
+            // is ALWAYS rendered (a blank space when empty) so the strip keeps a constant height — the
+            // picker never slides as you type.
+            // Incognito: the hole caption is readable while the hole bank is selected (you tapped your
+            // cards), and blurs whenever it isn't — so "peek" is just re-selecting hole. Board never hides.
+            let notation = groupNotation(street)
+            Text(notation.isEmpty ? " " : notation)
                 .font(.custom("Courier New", size: 13))
                 .fontWeight(.bold)
                 .tracking(1)
@@ -1315,6 +1350,7 @@ struct HandEntryView: View {
                 .minimumScaleFactor(0.7)
                 .frame(height: 20)
                 .padding(.top, 6)   // clearance for the straddling texture pill above
+                .blur(radius: hideReadouts ? 4 : 0)
         }
     }
 
@@ -2365,6 +2401,38 @@ struct SuitPips: View {
     }
 }
 
+// MARK: - Card Back — incognito hole cards (gold lattice + center diamond crest on dark)
+
+/// The face-down back shown for hero hole cards in incognito mode. Option 8: a fine gold cross-hatch
+/// lattice with a small gold diamond crest, framed by a gold rim — reads as a card back, not a bug.
+struct CardBackView: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(hex: "#15110A"))
+            Canvas { ctx, size in
+                let gold = GraphicsContext.Shading.color(Color(hex: "#C9A84C").opacity(0.45))
+                var path = Path()
+                let spacing: CGFloat = 6
+                var off = -size.height
+                while off < size.width + size.height {
+                    path.move(to: CGPoint(x: off, y: 0));            path.addLine(to: CGPoint(x: off + size.height, y: size.height))
+                    path.move(to: CGPoint(x: off, y: size.height));  path.addLine(to: CGPoint(x: off + size.height, y: 0))
+                    off += spacing
+                }
+                ctx.stroke(path, with: gold, lineWidth: 0.5)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Rectangle()
+                .fill(Color(hex: "#15110A"))
+                .frame(width: 13, height: 13)
+                .overlay(Rectangle().stroke(Color(hex: "#C9A84C"), lineWidth: 1))
+                .rotationEffect(.degrees(45))
+            RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color(hex: "#8A6E2E"), lineWidth: 1)
+        }
+        .frame(width: 40, height: 40)
+    }
+}
+
 // MARK: - Card Frame View — compact card face (rank + bound suit / "x"), thin for the strip band
 
 struct CardFrameView: View {
@@ -2372,9 +2440,24 @@ struct CardFrameView: View {
     var showBoundSuit: Bool = false   // true only in .bound mode — draws the suit pip on the face
     var boundUnknown: Bool = false    // bound, suitless, but a partner card is suited → grey "x"
     var suitRun: Int = 1              // turn/river: draw the suit pip this many times (board count)
+    var faceDown: Bool = false        // incognito: a filled hole card shows its back instead of the face
     let isActive: Bool
 
     var body: some View {
+        // Incognito: a filled card shows the back. Empty slots stay as the "?" placeholder (no card to hide).
+        if faceDown && !frame.isEmpty {
+            CardBackView()
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.gold, lineWidth: 2)
+                        .opacity(isActive ? 1 : 0)
+                )
+        } else {
+            faceBody
+        }
+    }
+
+    private var faceBody: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(frame.isEmpty ? Color.surface2 : Color(hex: "#F5F0E8"))
