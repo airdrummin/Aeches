@@ -121,14 +121,14 @@ Both halves operate independently. The user can fill in cards before recording a
    - **Fold-out**: when all but one player folds at any point, the hand closes immediately. No user action required.
    - **Showdown**: when the river closes with 2+ active players, a **Win / Lose / Chop** overlay appears centered on the table. Tap the outcome to close.
 
-7. **Summary state** — the hand stays on its number (e.g. "Hand #2"). The outcome appears as felt text stacked above the pulsing **"PLACE THE BUTTON"** instruction:
+7. **Summary state** — the hand stays on its number (e.g. "Hand #1"). The **table stays frozen on the finished hand** — seat actions, positions, dealer button, and the final street all remain on screen so the completed hand reads clearly (the river action stays visible). The outcome renders as felt text in the center:
    - "You win"
    - "You lose"
    - "Chop"
    - "Seat X wins" (fold-out where hero already folded)
-   The table top half resets visually — fold badges, dealer puck, and position labels all clear, leaving only plain numbered seats and the green hero seat. The card strip and transcript below the divider remain visible as a reference for the completed hand. The Control Bar goes quiet (Undo only). Undo remains live to reverse the close (re-open the showdown overlay, or peel a mis-folded fold-out).
+   The card strip and transcript below the divider remain fully editable — and at showdown/close, **empty card slots for streets the hand reached get a gold "enter these now" border** (hole always; a board street once it was dealt — so a flop fold-out lights hole+flop, not turn/river). The Control Bar goes quiet except for **Undo** (left) and **New Hand** (right, gold, pulsing). Undo remains live to reverse the close (re-open the showdown overlay, or peel a mis-folded fold-out).
 
-8. **Deal the next hand** — there is no New Hand button. From the closed state, **tap any seat to place the dealer button there and deal the next hand** — the same gesture used to place the button on hand #1. Hand number increments, state resets, recording starts immediately (no separate placing-button step). Hero seat stays locked for the session.
+8. **Deal the next hand** — tap the **New Hand** button (gold capsule, right of the utility row, shown only once the hand is closed). It's a **clean break**: the hand number advances (→ "Hand #2"), all hand state clears, and you land on the fresh **"PLACE THE BUTTON"** screen — then tap a seat to place the button, exactly like hand #1. Tapping a seat on the frozen closed table does nothing; New Hand is the only way forward. Hero seat stays locked for the session. (A skip already advanced the number, so New Hand won't double-count it.)
 
 ### Table Design
 
@@ -300,7 +300,7 @@ A running **shorthand text** of the hand renders in the gap below the strip (the
 - Fold-out detection (last player standing wins, hand closes immediately)
 - Showdown overlay (Win / Lose / Chop) triggered on river close with 2+ players
 - **Skip** and **Move** corner overlay buttons on the table oval — Skip saves the current hand as incomplete and preserves all state so Undo can fully restore recording; Move saves if mid-hand and returns to seat selection
-- Hand outcome summary state — outcome text rendered as felt text above the pulsing "PLACE THE BUTTON" instruction; table top half clears (fold badges, dealer puck, and position labels removed); card strip and transcript remain below the divider for reference; deal the next hand by tapping a seat (no New Hand button)
+- Hand outcome summary state — table stays **frozen** on the finished hand (seat actions, positions, dealer button all remain); outcome rendered as felt text in the center; card strip + transcript remain editable, with empty card slots for reached streets gold-bordered as an "enter now" cue; **New Hand** button (gold, right of Undo) is the clean break that advances the hand number and returns to the place-button screen — tapping a seat on the closed table is a no-op
 - `handNumber` single source of truth — advances only when the next hand is dealt (tap a seat from the closed state)
 - Per-street card picker — docks in the gap below the strip (strip slots are the frames and the live preview); per-street `CardGroup`/`CardFrame` with one suit mode each — **bound** (`AdJx`, suit on the face), **footnote** (`AJdx`, unassigned suit letters in a caption), **relationship** (`suited`/`offsuit`/`rainbow`/`mono`/`two tone`). Left-to-right entry, explicit `x` as a first-class card state, mutually-exclusive suit/shortcut gating (pairs disable `s`/`o`), type-a-rank-clears-a-full-group, slim grab handle to dismiss, and a Next (`›`) control that advances bank-to-bank
 - On-card suit display — uniform-footnote faces colored; a group **texture pill** straddles the card row for partial footnote (glyph set) or relationship (word). Glyph = a real suit; word = a texture (see Card Entry)

@@ -290,6 +290,9 @@ close**: after a fold-out it re-opens recording and peels the fold; after a reso
 re-opens the Win/Lose/Chop overlay to re-pick; after a **Skip** it restores recording to the exact
 point it was left without peeling any action (hand state was never cleared by Skip).
 
-**Dealing the next hand.** There is no New Hand button. From the closed state, tapping any seat
-places the dealer button there and deals the next hand (the same gesture as the first hand's button
-placement). Implemented in `HandEntryView.swift` (routing) and `SeatSelectionView.swift` (gestures).
+**Dealing the next hand.** At close the table stays **frozen** on the finished hand (seat actions,
+positions, and dealer button remain visible). The **New Hand** button (gold capsule, right of Undo,
+shown only when the hand is closed) is the clean break: it advances the hand number, clears all
+state, and returns to the "place the button" screen — then tapping a seat places the button for the
+new hand, exactly like hand #1. Tapping a seat on the frozen closed table does nothing. Implemented
+in `HandEntryView.swift` (`startNewHand`, routing) and `SeatSelectionView.swift` (gestures).

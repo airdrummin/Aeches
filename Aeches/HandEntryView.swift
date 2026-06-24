@@ -128,7 +128,8 @@ struct HandEntryView: View {
         switch phase {
         case .selectSeat:    return "TAKE\nYOUR SEAT"
         case .placingButton: return "PLACE\nTHE BUTTON"
-        case .handClosed:    return "PLACE\nTHE BUTTON"
+        // handClosed shows only the outcome (feltActionText) over the frozen table — the
+        // "place the button" instruction now belongs to the post–New-Hand placingButton screen.
         default:             return nil
         }
     }
@@ -248,14 +249,18 @@ struct HandEntryView: View {
                 TableOvalView(
                     tableSize: tableSize,
                     heroSeat: heroSeat,
-                    buttonSeat: phase == .handClosed ? nil : buttonSeat,
-                    seatStates: phase == .handClosed ? [:] : seatActions,
+                    // The table stays FROZEN on the finished hand at close — seat actions, positions,
+                    // and the dealer button all remain on screen so the just-played hand reads clearly
+                    // (e.g. the river action stays visible). New Hand is what clears it. (placingButton
+                    // has no buttonSeat yet, so the puck naturally hides there.)
+                    buttonSeat: buttonSeat,
+                    seatStates: seatActions,
                     // On a decisive close the ring drops entirely (Option A) — the pulse hands off to
                     // the Next Street button. The data pointer (`highlightedSeat`) stays intact for
                     // tap/rewind logic; only the *visual* highlight is suppressed here. A run-out also
                     // drops the ring — no one can act while the board is dealt out.
                     activeSeat: (streetClosedDecisively || isRunOut) ? nil : highlightedSeat,
-                    positions: phase == .handClosed ? [:] : seatPositions,
+                    positions: seatPositions,
                     onSeatTap: handleSeatTap,
                     onSeatSwipe: handleSeatSwipe,
                     instruction: tableInstruction,
@@ -362,12 +367,14 @@ struct HandEntryView: View {
                                             sizingChips: sizingChips,
                                             sizingSelectedType: sizingSelectedType,
                                             isRunOut: isRunOut,
+                                            showNewHand: phase == .handClosed,
                                             onAction: { commitAction($0) },
                                             onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
                                             onNextStreet: handleNextStreet,
                                             onAggressiveHold: handleAggressiveHold,
                                             onCallHold: handleCallHold,
-                                            onSizingChip: handleSizingChip
+                                            onSizingChip: handleSizingChip,
+                                            onNewHand: startNewHand
                                         )
                                         // Fills the region beneath the control bar — 3–5 lines, scrolls to the
                                         // newest action; the full hand is the expand drawer.
@@ -424,9 +431,9 @@ struct HandEntryView: View {
             break
 
         case .handClosed:
-            // The hand is over — tapping any seat places the dealer button there and deals the
-            // next hand. Reuses the exact gesture used to place the button on hand #1.
-            withAnimation(.easeInOut(duration: 0.2)) { dealNextHand(buttonAt: seat) }
+            // The table is frozen on the finished hand — tapping a seat does nothing. The explicit
+            // New Hand button (in the Control Bar) is the only way forward.
+            break
         }
     }
 
@@ -1450,6 +1457,25 @@ struct HandEntryView: View {
         }
     }
 
+    /// True when the hand reached this card street, so its cards were actually dealt. Hole is always
+    /// reached; a board street is reached once `currentStreet` is at or past it. (A run-out forces
+    /// `currentStreet` to river, so the full board counts.)
+    private func streetWasReached(_ street: CardStreet) -> Bool {
+        switch street {
+        case .hole:  return true
+        case .flop:  return currentStreet == .flop || currentStreet == .turn || currentStreet == .river
+        case .turn:  return currentStreet == .turn || currentStreet == .river
+        case .river: return currentStreet == .river
+        }
+    }
+
+    /// At showdown / a closed hand, empty slots for streets the hand reached get a gold "enter these
+    /// now" border — a nudge to fill the board/hole cards while looking at the result. Unreached
+    /// streets (e.g. the river after a flop fold-out) stay plain, though they remain enterable.
+    private func promptCardEntry(for street: CardStreet) -> Bool {
+        (phase == .showdown || phase == .handClosed) && streetWasReached(street)
+    }
+
     /// A street group: rank-forward card faces, with a caption hanging beneath the group. The caption
     /// encodes the unassigned suit info — footnote letters (`dx`, `hhx`) or a relationship word
     /// (`suited`, `two tone`). Bound mode shows its suits ON the faces and has no caption. The caption
@@ -1488,7 +1514,8 @@ struct HandEntryView: View {
                             (g.frames[i].suit == .unknown || (g.frames[i].suit == .unspecified && anyKnown)),
                         suitRun: g.suitRun,   // turn/river board count → repeated pips (1 elsewhere)
                         faceDown: faceDown,
-                        isActive: entryStreet == street && focusIndex == i
+                        isActive: entryStreet == street && focusIndex == i,
+                        promptEmpty: promptCardEntry(for: street)
                     )
                     .onTapGesture { openCardEntry(street) }
                 }
@@ -2354,17 +2381,19 @@ struct HandEntryView: View {
     /// Deals the next hand from the hand-closed state: place the dealer button on the tapped seat,
     /// reset per-hand state, highlight the first actor, and start recording. The hand that just
     /// finished was already saved at close, so nothing is persisted here.
-    private func dealNextHand(buttonAt seat: Int) {
-        handNumber += 1
-        resetHandState()
-        buttonSeat = seat
-        activeSeatSequence = Array(0..<tableSize)
-        highlightedSeat = firstActor(of: .preflop)
-        phase = .recordingHand
+    /// New Hand — a clean break from the finished hand. Advances the hand number, clears all hand
+    /// state, and returns to the "place the button" screen (the same fresh start as hand #1). A skip
+    /// already advanced the number, so guard against a double-increment in that case.
+    private func startNewHand() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if !lastHandWasSkipped { handNumber += 1 }
+            resetHandState()           // also clears lastHandWasSkipped
+            phase = .placingButton
+        }
     }
 
     /// Saves the current hand as incomplete (outcome: nil) and moves to handClosed without clearing
-    /// hand state — so Undo can fully restore recording. dealNextHand / moveSeat will reset when the
+    /// hand state — so Undo can fully restore recording. startNewHand / moveSeat will reset when the
     /// user actually moves on. Hand number increments; the skip flag lets undoLastAction skip the peel.
     private func skipHand() {
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -2437,12 +2466,14 @@ private struct ControlBar: View {
     let sizingChips: [String]              // the strip to render in that row
     let sizingSelectedType: ActionType?    // which action is being sized (drives "selected" chip)
     let isRunOut: Bool                     // ≤1 player with chips — no betting, board runs out
+    let showNewHand: Bool                  // hand closed — show the New Hand button (forward action)
     let onAction: (ActionType) -> Void
     let onRewind: () -> Void
     let onNextStreet: () -> Void
     let onAggressiveHold: () -> Void        // 0.3s hold fired on the Raise/Bet button
     let onCallHold: () -> Void              // 0.3s hold fired on the Call button → call-all-in
     let onSizingChip: (String) -> Void      // a size chip was tapped
+    let onNewHand: () -> Void               // start the next hand (clears to the place-button screen)
 
     // Hold classification for the Raise/Bet button — same proven single-DragGesture pattern as the
     // seats: a stationary press past 0.3s is a hold (→ sizing), anything shorter is a quick tap.
@@ -2468,6 +2499,7 @@ private struct ControlBar: View {
                     } else {
                         Spacer(minLength: 0)
                         if isRecording { nextStreetButton }
+                        else if showNewHand { newHandButton }   // forward action when the hand is closed
                     }
                 }
                 // Primary row — full-width action buttons, the most-used controls in the thumb zone.
@@ -2605,6 +2637,44 @@ private struct ControlBar: View {
         .buttonStyle(.plain)
         .disabled(!nextStreetEnabled)
         .opacity(nextStreetEnabled ? 1.0 : 0.55)
+    }
+
+    // MARK: New Hand (forward action when the hand is closed)
+
+    /// Gold capsule in the Next Street slot, shown only once the hand is closed. Pulses to draw the
+    /// eye to the next step now that tapping a seat no longer deals — this is the only way forward.
+    private var newHandButton: some View {
+        Pulse(isActive: true) { phase in
+            newHandButtonBody.scaleEffect(1.0 + 0.04 * phase)
+        }
+    }
+
+    private var newHandButtonBody: some View {
+        Button(action: onNewHand) {
+            HStack(spacing: 4) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .bold))
+                Text("New Hand")
+                    .font(.custom("Arial", size: 11))
+                    .fontWeight(.bold)
+                    .tracking(0.5)
+            }
+            .foregroundStyle(Color(hex: "#0D0D0D"))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(
+                Capsule().fill(
+                    LinearGradient(
+                        colors: [Color.gold, Color(hex: "#9A6820")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            )
+            .overlay(Capsule().stroke(Color.goldLight.opacity(0.6), lineWidth: 1))
+            .shadow(color: Color.gold.opacity(0.4), radius: 6)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: Context-aware action buttons (middle)
@@ -2876,6 +2946,7 @@ struct CardFrameView: View {
     var suitRun: Int = 1              // turn/river: draw the suit pip this many times (board count)
     var faceDown: Bool = false        // incognito: a filled hole card shows its back instead of the face
     let isActive: Bool
+    var promptEmpty: Bool = false     // showdown/closed: gold "enter this now" border on an empty slot
 
     var body: some View {
         // Incognito: a filled card shows the back. Empty slots stay as the "?" placeholder (no card to hide).
@@ -2897,7 +2968,7 @@ struct CardFrameView: View {
                 .fill(frame.isEmpty ? Color.surface2 : Color(hex: "#F5F0E8"))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(isActive ? Color.gold : (frame.isEmpty ? Color.borderDark.opacity(0.5) : Color.clear), lineWidth: isActive ? 2 : 1)
+                        .stroke(strokeColor, lineWidth: isActive ? 2 : (frame.isEmpty && promptEmpty ? 1.5 : 1))
                 )
                 .shadow(color: isActive ? Color.gold.opacity(0.4) : .clear, radius: 6)
 
@@ -2931,6 +3002,14 @@ struct CardFrameView: View {
             }
         }
         .frame(width: 40, height: 40)
+    }
+
+    /// Border: gold when focused (active) or when an empty slot is being prompted for entry
+    /// (showdown/closed); a faint outline for a plain empty slot; invisible for a filled face.
+    private var strokeColor: Color {
+        if isActive { return Color.gold }
+        if frame.isEmpty { return promptEmpty ? Color.gold : Color.borderDark.opacity(0.5) }
+        return Color.clear
     }
 
     // The rank takes the suit color only when a bound suit is shown; otherwise it stays neutral black
