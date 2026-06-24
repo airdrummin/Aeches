@@ -44,6 +44,12 @@ struct HandEntryView: View {
     /// false by every record/tap/rewind/advance/deal via `recomputeDerivedState` + `resetHandState`.
     @State private var streetClosedDecisively: Bool = false
 
+    /// True while the control-bar sizing chip row is showing — armed by a 0.3s hold on the Raise/Bet
+    /// button, which records the aggressive action UNSIZED immediately (like cycling). Tapping a chip
+    /// re-records it sized and advances; any other committed input / undo / tap dismisses the row. The
+    /// held action is a normal log entry, so Undo peels it with no special case (see SizingOverhaul.md).
+    @State private var sizingRowVisible: Bool = false
+
     // Card state — one CardGroup per street (hole pair / flop / turn / river). Each group owns its
     // frames plus a single suit mode (none / bound / footnote / relationship). See `CardGroup`.
     @State private var holeGroup  = CardGroup(capacity: 2)
@@ -102,6 +108,8 @@ struct HandEntryView: View {
 
     private var feltActionText: String? {
         switch phase {
+        case .recordingHand where isRunOut:
+            return "ALL IN"                 // run-out — board is dealt out, no more betting
         case .recordingHand where !streetClosedDecisively:
             switch currentStreet {
             case .preflop: return "PREFLOP"
@@ -159,9 +167,11 @@ struct HandEntryView: View {
         canAdvanceStreet || pendingFoldOut
     }
 
-    /// Button label: "End Hand" when committing a fold-out, otherwise the next street (River → Showdown).
+    /// Button label: "End Hand" when committing a fold-out, "Showdown" in a run-out (it jumps
+    /// straight to the result — no street-by-street walk), otherwise the next street.
     private var nextStreetLabel: String {
         if pendingFoldOut { return "End Hand" }
+        if isRunOut { return "Showdown" }
         switch currentStreet {
         case .preflop: return "Flop"
         case .flop:    return "Turn"
@@ -191,6 +201,7 @@ struct HandEntryView: View {
             // Advancing leaves the decisive-close state. Required for the river→showdown path, which
             // sets phase without a recompute and would otherwise leak the flag into showdown.
             streetClosedDecisively = false
+            sizingRowVisible = false
             if pendingFoldOut {
                 triggerFoldOut()
                 return
@@ -241,13 +252,12 @@ struct HandEntryView: View {
                     seatStates: phase == .handClosed ? [:] : seatActions,
                     // On a decisive close the ring drops entirely (Option A) — the pulse hands off to
                     // the Next Street button. The data pointer (`highlightedSeat`) stays intact for
-                    // tap/rewind logic; only the *visual* highlight is suppressed here.
-                    activeSeat: streetClosedDecisively ? nil : highlightedSeat,
+                    // tap/rewind logic; only the *visual* highlight is suppressed here. A run-out also
+                    // drops the ring — no one can act while the board is dealt out.
+                    activeSeat: (streetClosedDecisively || isRunOut) ? nil : highlightedSeat,
                     positions: phase == .handClosed ? [:] : seatPositions,
                     onSeatTap: handleSeatTap,
                     onSeatSwipe: handleSeatSwipe,
-                    sizingStrip: sizingStrip(for:),
-                    onSeatSize: handleSeatSize,
                     instruction: tableInstruction,
                     actionText: feltActionText,
                     // One consistent table size across every phase (seat-select → showdown). The oval
@@ -338,15 +348,26 @@ struct HandEntryView: View {
                                         ControlBar(
                                             isRecording: phase == .recordingHand,
                                             currentStreet: currentStreet,
-                                            openBetExists: openBetExists,
+                                            // The acting seat's own context (matches cycleSeat/swipe/
+                                            // hold logic), NOT the global bet level. A seat that has
+                                            // opened the betting still reads "no bet faced" — so its
+                                            // Check/Bet row never flips to Fold/Call/Raise mid-action.
+                                            facesBet: highlightedSeat.map(seatFacesBet) ?? false,
                                             highlightedSeat: highlightedSeat,
                                             rewindEnabled: rewindButtonEnabled,
                                             nextStreetEnabled: nextStreetButtonEnabled,
-                                            nextStreetPulsing: streetClosedDecisively,
+                                            nextStreetPulsing: streetClosedDecisively || isRunOut,
                                             nextStreetLabel: nextStreetLabel,
+                                            sizingActive: sizingRowVisible,
+                                            sizingChips: sizingChips,
+                                            sizingSelectedType: sizingSelectedType,
+                                            isRunOut: isRunOut,
                                             onAction: { commitAction($0) },
                                             onRewind: { withAnimation(.easeInOut(duration: 0.15)) { undoLastAction() } },
-                                            onNextStreet: handleNextStreet
+                                            onNextStreet: handleNextStreet,
+                                            onAggressiveHold: handleAggressiveHold,
+                                            onCallHold: handleCallHold,
+                                            onSizingChip: handleSizingChip
                                         )
                                         // Fills the region beneath the control bar — 3–5 lines, scrolls to the
                                         // newest action; the full hand is the expand drawer.
@@ -377,6 +398,8 @@ struct HandEntryView: View {
     // MARK: - Seat Tap Handler
 
     private func handleSeatTap(_ seat: Int) {
+        // Any seat interaction dismisses a pending sizing row (the staged raise/bet stays in the log).
+        if sizingRowVisible { withAnimation(.easeInOut(duration: 0.15)) { sizingRowVisible = false } }
         switch phase {
         case .selectSeat:
             heroSeat = seat
@@ -416,6 +439,8 @@ struct HandEntryView: View {
         if seat == highlightedSeat { cycleSeat(seat); return }
         // Folded or empty seats are dead. (Hero is a normal active seat — no special-casing.)
         guard activeSeatSequence.contains(seat) else { return }
+        // All-in seats have no chips and can't act — tapping one is a no-op.
+        if allInSeats.contains(seat) { return }
         // A seat that has acted and faces no new aggression is resolved — cannot be retouched.
         if hasActed(seat) && !owesAction(seat) { return }
         // Re-aggression block: if the seat on the clock has acted but owes a response to new
@@ -447,11 +472,11 @@ struct HandEntryView: View {
     @discardableResult
     private func autoResolveSkipped(to seat: Int) -> Bool {
         var skipped: [Int] = []
-        if let from = highlightedSeat, activeSeatSequence.contains(from), !hasActed(from) {
+        if let from = highlightedSeat, activeSeatSequence.contains(from), !hasActed(from), !allInSeats.contains(from) {
             skipped.append(from)
         }
         skipped += seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
-            .filter { !hasActed($0) }
+            .filter { !hasActed($0) && !allInSeats.contains($0) }
 
         if currentStreet == .preflop {
             return autoFoldSeats(skipped, autoFolded: true)    // may trigger a fold-out
@@ -471,6 +496,8 @@ struct HandEntryView: View {
         if seat == highlightedSeat { cycleSeat(seat); return }
         // Folded or empty seats are dead.
         guard activeSeatSequence.contains(seat) else { return }
+        // All-in seats have no chips and can't act — tapping one is a no-op.
+        if allInSeats.contains(seat) { return }
         // A seat that has acted and faces no new aggression is resolved.
         if hasActed(seat) && !owesAction(seat) { return }
         // Re-aggression block: the seat on the clock must respond to new aggression before the
@@ -540,12 +567,13 @@ struct HandEntryView: View {
     private func handleSeatSwipe(_ seat: Int, _ dir: SwipeDirection) {
         guard phase == .recordingHand else { return }
         guard let action = swipeAction(dir, for: seat) else { return }   // illegal direction → no-op
-        routeDecisive(action, to: seat, sizing: nil)
+        if sizingRowVisible { sizingRowVisible = false }   // a decisive swipe dismisses the sizing row
+        routeDecisive(action, to: seat)
     }
 
-    /// Shared decisive routing for swipes and sized holds — mirrors the tap routing but always
-    /// lands a specific action and advances. `sizing` (Phase 2) is attached to the landed action.
-    private func routeDecisive(_ action: ActionType, to seat: Int, sizing: RaiseSizing?) {
+    /// Shared decisive routing for swipes — mirrors the tap routing but always lands a specific
+    /// action and advances. Swipes are always unsized (sizing lives on the Raise/Bet button hold).
+    private func routeDecisive(_ action: ActionType, to seat: Int) {
         withAnimation(.easeInOut(duration: 0.15)) {
             // On-clock seat → record + move to the next player. Routed through finishSwipe (not
             // commitAction) so a swipe never auto-advances the street — only the Next Street button does.
@@ -555,11 +583,13 @@ struct HandEntryView: View {
                 // second action. owesAction == true means it owes a fresh response (never acted, or
                 // facing new aggression) — that's a genuinely separate action, so don't remove it.
                 if hasActed(seat) && !owesAction(seat) { removeLastAction(of: seat) }
-                finishSwipe(on: seat, action: action, sizing: sizing)
+                finishSwipe(on: seat, action: action)
                 return
             }
             // Dead seats (folded / not in hand).
             guard activeSeatSequence.contains(seat) else { return }
+            // All-in seats have no chips and can't act.
+            if allInSeats.contains(seat) { return }
             // Resolved: acted and owes nothing.
             if hasActed(seat) && !owesAction(seat) { return }
             // Re-aggression: the on-clock seat must respond before any other seat is actionable.
@@ -568,57 +598,108 @@ struct HandEntryView: View {
             if currentStreet != .preflop && openBetExists {
                 // Bet context: strict — only the exact next owing seat, no skip-jumping into a bet.
                 guard seat == nextOwingSeat(after: highlightedSeat ?? seat) else { return }
-                commitSwipeStrict(to: seat, action: action, sizing: sizing)
+                commitSwipeStrict(to: seat, action: action)
             } else {
                 // Navigation context: cannot skip an already-acted seat.
                 let between = seatsStrictlyBetween(from: highlightedSeat ?? seat, to: seat, in: activeSeatSequence)
                 if between.contains(where: { hasActed($0) }) { return }
-                commitSwipeJump(to: seat, action: action, sizing: sizing)
+                commitSwipeJump(to: seat, action: action)
             }
         }
     }
 
     /// Navigation-context swipe: auto-resolve skipped seats, then land `action` on the destination.
-    private func commitSwipeJump(to seat: Int, action: ActionType, sizing: RaiseSizing? = nil) {
+    private func commitSwipeJump(to seat: Int, action: ActionType) {
         if autoResolveSkipped(to: seat) { return }   // fold-out already ended the hand
-        finishSwipe(on: seat, action: action, sizing: sizing)
+        finishSwipe(on: seat, action: action)
     }
 
     /// Strict bet-context swipe (the seat IS the next owing seat): commit the on-clock seat's
     /// default response first, then land `action` on the destination.
-    private func commitSwipeStrict(to seat: Int, action: ActionType, sizing: RaiseSizing? = nil) {
+    private func commitSwipeStrict(to seat: Int, action: ActionType) {
         if let cur = highlightedSeat, owesAction(cur) {
             recordAction(seatFacesBet(cur) ? .call : .check, for: cur)
         }
-        finishSwipe(on: seat, action: action, sizing: sizing)
+        finishSwipe(on: seat, action: action)
     }
 
     /// Shared tail for swipes: record the action on `seat`, then settle (see `settleAfterCommit`).
     /// A swipe picks the action directly instead of cycling to it, then advances the ring to the
     /// next player WITHOUT seeding any action there — identical to an action-button press.
-    private func finishSwipe(on seat: Int, action: ActionType, sizing: RaiseSizing? = nil) {
-        recordAction(action, for: seat, sizing: sizing)
+    private func finishSwipe(on seat: Int, action: ActionType) {
+        recordAction(action, for: seat)
         settleAfterCommit(on: seat, justFolded: action == .fold)
     }
 
-    // MARK: - Seat Sizing (hold-to-size, Phase 2)
+    // MARK: - Action-button hold-to-size
 
-    /// The ordered sizing strip for `seat` (floor → All-in), or [] when sizing isn't applicable.
-    /// Multiple strip for any raise/open (preflop is always a bet context); percent strip for a
-    /// post-flop opening bet.
-    private func sizingStrip(for seat: Int) -> [String] {
-        guard phase == .recordingHand, activeSeatSequence.contains(seat) else { return [] }
+    /// The aggressive action for the seat on the clock: a raise in a bet context (preflop, or any
+    /// street facing a wager), an open (first bet) in a no-bet post-flop context.
+    private var aggressiveActionType: ActionType {
+        guard let seat = highlightedSeat else { return .raise }
         let betContext = currentStreet == .preflop || seatFacesBet(seat)
-        return betContext ? Self.multipleStrip : Self.betStrip
+        return betContext ? .raise : .open
     }
 
-    /// A completed hold-to-size on `seat`: records the aggressive action (bet/raise by context)
-    /// with the chosen size, routed exactly like a swipe.
-    private func handleSeatSize(_ seat: Int, _ label: String) {
-        guard phase == .recordingHand, activeSeatSequence.contains(seat) else { return }
-        let betContext = currentStreet == .preflop || seatFacesBet(seat)
-        let action: ActionType = betContext ? .raise : .open
-        routeDecisive(action, to: seat, sizing: makeSizing(label))
+    /// The action type the sizing row is currently sizing (the held seat's last logged action), or
+    /// nil when no row is up. Drives which action button renders "selected" — Raise/Bet for a wager,
+    /// Call for a call-all-in.
+    private var sizingSelectedType: ActionType? {
+        guard sizingRowVisible, let seat = highlightedSeat else { return nil }
+        return actionsThisStreet.last(where: { $0.seatIndex == seat })?.actionType
+    }
+
+    /// The sizing chip strip for the currently-staged action: multiples for a raise, pot fractions
+    /// for an opening bet, and the single "All-in" chip for a call (the call-all-in marker). Derived
+    /// from the last logged action so it stays correct after the hold records.
+    private var sizingChips: [String] {
+        switch sizingSelectedType {
+        case .open: return Self.betStrip
+        case .call: return ["All-in"]
+        default:    return Self.multipleStrip   // .raise (or fallback)
+        }
+    }
+
+    /// A 0.3s hold on the Raise/Bet button: record the aggressive action UNSIZED right now (identical
+    /// to cycling, which also writes immediately), then reveal the sizing row. Because the action is a
+    /// real log entry, Undo needs no special case — it peels the raise/bet like any other action; we
+    /// only also hide the row. The ring is NOT advanced — the seat stays on the clock until a chip is
+    /// tapped (or the row is dismissed by another input).
+    private func handleAggressiveHold() {
+        guard phase == .recordingHand, let seat = highlightedSeat else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if hasActed(seat) && !owesAction(seat) { removeLastAction(of: seat) }
+            recordAction(aggressiveActionType, for: seat)
+            sizingRowVisible = true
+        }
+    }
+
+    /// A 0.3s hold on the Call button: record an (unsized) call now and reveal a single "All-in"
+    /// chip, so the user can flag that this call put the player all-in. Mirrors the aggressive hold;
+    /// tapping the chip routes through `handleSizingChip` (re-records the call with the All-in
+    /// marker). Only meaningful when facing a wager — a limp can't be all-in.
+    private func handleCallHold() {
+        guard phase == .recordingHand, let seat = highlightedSeat, seatFacesBet(seat) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if hasActed(seat) && !owesAction(seat) { removeLastAction(of: seat) }
+            recordAction(.call, for: seat)
+            sizingRowVisible = true
+        }
+    }
+
+    /// A sizing chip tapped: replace the staged unsized raise/bet with a sized one (same action type,
+    /// read back from the log), then settle exactly like a committed input (advance the ring, light
+    /// Next Street on a close). Dismisses the sizing row.
+    private func handleSizingChip(_ label: String) {
+        guard phase == .recordingHand, let seat = highlightedSeat,
+              let type = actionsThisStreet.last(where: { $0.seatIndex == seat })?.actionType
+        else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            removeLastAction(of: seat)
+            recordAction(type, for: seat, sizing: makeSizing(label))
+            sizingRowVisible = false
+            settleAfterCommit(on: seat, justFolded: false)
+        }
     }
 
     /// Builds a RaiseSizing from a strip label — notation only, no chip math.
@@ -634,16 +715,18 @@ struct HandEntryView: View {
         return RaiseSizing(type: .multiple, value: nil, label: label)
     }
 
-    /// 2.0x … 5.0x (0.1x steps) then All-in — preflop opens, re-raises, post-flop raises.
-    private static let multipleStrip: [String] =
-        (20...50).map { String(format: "%.1fx", Double($0) / 10) } + ["All-in"]
+    /// Curated raise multiples then All-in — preflop opens, re-raises, post-flop raises.
+    private static let multipleStrip: [String] = [
+        "2x", "2.2x", "2.5x", "2.8x", "3x", "3.2x", "3.5x", "4x", "5x", "All-in"
+    ]
 
-    /// 5% … 95% (5% steps), Pot, then 1.1x … 5.0x (0.1x steps) ×pot, then All-in — post-flop bet.
-    private static let betStrip: [String] =
-        stride(from: 5, through: 95, by: 5).map { "\($0)%" }
-        + ["Pot"]
-        + (11...50).map { String(format: "%.1fx", Double($0) / 10) }
-        + ["All-in"]
+    /// Curated pot fractions, Pot, a few overbets (as % of pot), then All-in — post-flop opening bet.
+    private static let betStrip: [String] = [
+        "10%", "25%", "33%", "50%", "67%", "75%", "90%",
+        "Pot",
+        "110%", "120%", "150%", "200%",
+        "All-in"
+    ]
 
     // MARK: - Action Cycling (shared by both streets)
 
@@ -715,6 +798,9 @@ struct HandEntryView: View {
         // Wrapped in withAnimation to match the swipe path — gives the highlight transition a finite
         // animation transaction (smooth ring move; also belt-and-suspenders for the pulse cancel).
         withAnimation(.easeInOut(duration: 0.15)) {
+            // A quick tap on Raise/Bet while the sizing row is up means "commit unsized" — supersede
+            // the staged action and advance. The flag clears here so the row dismisses with it.
+            sizingRowVisible = false
             if hasActed(seat) && !owesAction(seat) { removeLastAction(of: seat) }
             recordAction(type, for: seat)
             settleAfterCommit(on: seat, justFolded: type == .fold)
@@ -745,7 +831,7 @@ struct HandEntryView: View {
     /// just-folded seat is no longer in the active subset, so we cannot rotate from it there).
     private func nextActiveSeat(after seat: Int) -> Int? {
         let ring = clockwiseOrder(from: seat, seats: Array(0..<tableSize))
-        return ring.dropFirst().first { activeSeatSequence.contains($0) }
+        return ring.dropFirst().first { playersWithChips.contains($0) }   // skip all-in seats
     }
 
     private func triggerFoldOut() {
@@ -818,8 +904,29 @@ struct HandEntryView: View {
                 action: current.action,
                 betLevel: current.betLevel,
                 priorActions: Array(prior),
-                sizeLabel: sizeLabel
+                sizeLabel: sizeLabel,
+                isAllIn: allInSeats.contains(seat)
             )
+        }
+
+        // All-in badge persists across streets. On a street where an all-in seat has no action of
+        // its own, surface it with the symbol of HOW it got all-in (jam-bet →, jam-raise ↑↑, or
+        // call-all-in ✓) so the table still reads "this seat is committed" every street.
+        let everyAction = streets.flatMap { $0.actions } + actionsThisStreet
+        for seat in allInSeats {
+            if var existing = result[seat] {
+                existing.isAllIn = true
+                result[seat] = existing
+            } else if let mark = everyAction.last(where: { $0.seatIndex == seat && $0.sizing?.label == "All-in" }) {
+                let sym: SeatState.Action
+                switch mark.actionType {
+                case .call:  sym = .call
+                case .open:  sym = .open
+                case .raise: sym = .raise
+                default:     sym = .call
+                }
+                result[seat] = SeatState(action: sym, isAllIn: true)
+            }
         }
         return result
     }
@@ -832,6 +939,11 @@ struct HandEntryView: View {
     /// jump returns to "first to act", not the seat that was tapped. Card slots are left
     /// untouched — rewind only affects recorded action.
     private func undoLastAction() {
+        // Dismiss a pending sizing row. The staged raise/bet is a normal log entry, so we do NOT
+        // return here — flow continues to the peel path below and removes it, returning the seat to
+        // its previous state. One press both hides the row and undoes the raise (see SizingOverhaul.md).
+        sizingRowVisible = false
+
         // A finished hand is reversible. Un-close it first, discriminating by the saved hand's
         // outcome (showdown saves a non-nil outcome; a fold-out saves nil; a skip sets the flag).
         if phase == .handClosed {
@@ -936,6 +1048,53 @@ struct HandEntryView: View {
         }.count
     }
 
+    // MARK: - All-In State (derived from the log)
+
+    /// Seats that are all-in this hand — any action (any street) carrying the "All-in" size marker.
+    /// An all-in is recorded as an `.open`/`.raise`/`.call` whose `sizing.label == "All-in"`, so this
+    /// is pure-derived (no stored flag) and tracks Undo automatically. All-in persists across streets.
+    private var allInSeats: Set<Int> {
+        let allActions = streets.flatMap { $0.actions } + actionsThisStreet
+        return Set(allActions.filter { $0.sizing?.label == "All-in" }.map { $0.seatIndex })
+    }
+
+    /// Seats still in the hand AND holding chips — the only seats that can still make a betting
+    /// decision. Folded seats and all-in seats are both excluded (folds leave the hand; all-ins keep
+    /// their seat for showdown but can never act again). This is the acting set for close detection,
+    /// the highlight ring, and `owesAction` — the all-in equivalent of "who's left to act."
+    private var playersWithChips: [Int] {
+        activeSeatSequence.filter { !allInSeats.contains($0) }
+    }
+
+    /// True when betting can no longer continue: ≥2 players remain in the hand but ≤1 still has
+    /// chips, so the board just runs out to showdown with no further action. Drives run-out mode
+    /// (no action buttons, the felt reads ALL IN, Next Street walks the board to showdown).
+    ///
+    /// Gated on the current betting being SETTLED — if the lone chip-holder still owes a response to
+    /// an all-in just made (e.g. they must call or fold the jam), it is NOT yet a run-out: they keep
+    /// their action buttons until they respond. Only once that's resolved does the board run out.
+    private var isRunOut: Bool {
+        guard phase == .recordingHand, activeSeatSequence.count >= 2, playersWithChips.count <= 1 else {
+            return false
+        }
+        if let lone = playersWithChips.first, facesUnansweredBet(lone) { return false }
+        return true
+    }
+
+    /// True when `seat` still owes a response to an unanswered bet/raise made by ANOTHER seat this
+    /// street (so it must act before the street can close). Distinct from `owesAction`: a fresh
+    /// run-out street where the lone chip-holder simply hasn't acted does NOT face a bet, so the
+    /// board can be run out without forcing a pointless check.
+    private func facesUnansweredBet(_ seat: Int) -> Bool {
+        guard let lastAggIdx = actionsThisStreet.lastIndex(where: {
+            ($0.actionType == .open || $0.actionType == .raise) && $0.seatIndex != seat
+        }) else { return false }
+        if let mineIdx = actionsThisStreet.lastIndex(where: { $0.seatIndex == seat }) {
+            return mineIdx < lastAggIdx   // their last action predates the aggression → still owe
+        }
+        return true                       // never acted but a bet stands → facing it
+    }
+
     // MARK: - Street Close Detection
 
     /// Pure predicate — has the current betting round completed? Does NOT mutate state.
@@ -944,10 +1103,20 @@ struct HandEntryView: View {
     /// aggressor must have called or folded after that aggressor's raise (BB included,
     /// since BB is active and acts last).
     private func streetIsClosed() -> Bool {
-        let activePlayers = activeSeatSequence
+        // One player left in the hand is a fold-out, handled separately — not a street close.
+        if activeSeatSequence.count <= 1 { return false }
 
-        // One player left is a fold-out, handled separately — not a street close.
-        if activePlayers.count <= 1 { return false }
+        // The acting set is players who still have chips (folded + all-in both excluded). All-in
+        // seats can't respond, so they never hold a street open.
+        let activePlayers = playersWithChips
+
+        // At most one chip-holder → no betting contest is possible. The street is closed UNLESS that
+        // lone player still owes a response to an all-in made this street (they must call/fold it
+        // first). Zero chip-holders (everyone all-in) is always closed → straight to the run-out.
+        if activePlayers.count <= 1 {
+            if let lone = activePlayers.first, facesUnansweredBet(lone) { return false }
+            return true
+        }
 
         let aggressorIndices = actionsThisStreet.indices.filter {
             actionsThisStreet[$0].actionType == .open || actionsThisStreet[$0].actionType == .raise
@@ -982,6 +1151,16 @@ struct HandEntryView: View {
 
     /// Close the current street (or open the showdown on a completed river).
     private func advanceStreetOrShowdown() {
+        // Run-out: betting is settled and ≤1 player has chips, so there are no more decisions — the
+        // board just gets dealt out. Skip the street-by-street walk and jump straight to the showdown
+        // overlay in one move (closing each remaining street so the transcript renders the full board
+        // — it shows streets up to `currentStreet`). The run-out board is entered in the always-live
+        // card strip, before or after picking the result. This is the same showdown the river reaches.
+        if isRunOut {
+            while currentStreet != .river { closeStreet() }
+            if activeSeatSequence.count >= 2 { phase = .showdown }
+            return
+        }
         if currentStreet == .river {
             if activeSeatSequence.count >= 2 {
                 phase = .showdown
@@ -1003,13 +1182,14 @@ struct HandEntryView: View {
 
     // MARK: - Street Management
 
-    /// First active seat clockwise from the button — the opener of the next post-flop street.
+    /// First chip-holding seat clockwise from the button — the opener of the next post-flop street.
+    /// Skips all-in seats (they can't open) as well as folded seats.
     private func firstActorAfterClose() -> Int? {
         let btn = buttonSeat ?? 0
         let all = Array(0..<tableSize)
         let btnIdx = all.firstIndex(of: btn) ?? 0
         let rotated = Array(all[(btnIdx + 1)...]) + Array(all[...btnIdx])
-        return rotated.first { activeSeatSequence.contains($0) }
+        return rotated.first { playersWithChips.contains($0) }
     }
 
     /// The opener of a street: UTG (or BB short-handed) preflop, else the first active seat left of
@@ -1028,7 +1208,10 @@ struct HandEntryView: View {
         actionsThisStreet = []
         if let next = currentStreet.next() {
             currentStreet = next
-            highlightedSeat = firstActorAfterClose()
+            // Run-out (≤1 chip-holder): no one acts this street — drop the ring entirely; the user
+            // just enters board cards and taps through to showdown. Otherwise open on the first
+            // chip-holder left of the button.
+            highlightedSeat = isRunOut ? nil : firstActorAfterClose()
         }
         recomputeDerivedState()
     }
@@ -1085,9 +1268,9 @@ struct HandEntryView: View {
     /// action (it faces aggression and owes a response — e.g. an opener facing a 3-bet). Derived
     /// purely from the append-only log, the single source of truth.
     private func owesAction(_ seat: Int) -> Bool {
-        guard activeSeatSequence.contains(seat) else { return false }
+        guard playersWithChips.contains(seat) else { return false }   // folded or all-in → never owes
         guard let lastIdx = actionsThisStreet.lastIndex(where: { $0.seatIndex == seat }) else {
-            return true   // active and yet to act this street
+            return true   // has chips and yet to act this street
         }
         return actionsThisStreet[(lastIdx + 1)...].contains {
             $0.actionType == .open || $0.actionType == .raise
@@ -2102,7 +2285,9 @@ struct HandEntryView: View {
         switch a.actionType {
         case .fold:  return "fold"
         case .check: return "chk"
-        case .call:  return (isPreflop && !priorAggression) ? "limp" : "call"
+        case .call:
+            if a.sizing?.label == "All-in" { return "call (all-in)" }   // a call that committed the rest
+            return (isPreflop && !priorAggression) ? "limp" : "call"
         case .open:
             if let label = a.sizing?.label { return label == "All-in" ? "jam" : label }
             return isPreflop ? "raise" : "bet"
@@ -2241,15 +2426,28 @@ struct HandEntryView: View {
 private struct ControlBar: View {
     let isRecording: Bool
     let currentStreet: StreetName
-    let openBetExists: Bool
+    let facesBet: Bool                      // does the seat ON THE CLOCK face a wager? (per-seat
+                                            // context, like the engine — NOT the global bet level)
     let highlightedSeat: Int?
     let rewindEnabled: Bool
     let nextStreetEnabled: Bool
     let nextStreetPulsing: Bool
     let nextStreetLabel: String
+    let sizingActive: Bool                 // sizing chip row showing (Raise/Bet/Call was held)
+    let sizingChips: [String]              // the strip to render in that row
+    let sizingSelectedType: ActionType?    // which action is being sized (drives "selected" chip)
+    let isRunOut: Bool                     // ≤1 player with chips — no betting, board runs out
     let onAction: (ActionType) -> Void
     let onRewind: () -> Void
     let onNextStreet: () -> Void
+    let onAggressiveHold: () -> Void        // 0.3s hold fired on the Raise/Bet button
+    let onCallHold: () -> Void              // 0.3s hold fired on the Call button → call-all-in
+    let onSizingChip: (String) -> Void      // a size chip was tapped
+
+    // Hold classification for the Raise/Bet button — same proven single-DragGesture pattern as the
+    // seats: a stationary press past 0.3s is a hold (→ sizing), anything shorter is a quick tap.
+    @State private var holdFired: Bool = false
+    @State private var holdTimer: DispatchWorkItem? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2258,15 +2456,23 @@ private struct ControlBar: View {
                 .frame(height: 1)
 
             VStack(spacing: 10) {
-                // Utility row — Undo (left) · Next Street (right). Stays visible when the hand is
-                // closed (Undo only); Next Street and the action row are recording-only.
-                HStack(spacing: 0) {
+                // Utility row — Undo (left) · Next Street (right). When Raise/Bet is held the sizing
+                // chips take the whole row to the right of Undo: Next Street is hidden (a staged
+                // raise/bet never closes the street, so it would be disabled anyway), giving the chips
+                // full width. The action row below never shifts. Undo only when the hand is closed.
+                HStack(spacing: 8) {
                     undoButton
-                    Spacer()
-                    if isRecording { nextStreetButton }
+                    if isRecording && sizingActive {
+                        sizingScroll
+                            .transition(.opacity)
+                    } else {
+                        Spacer(minLength: 0)
+                        if isRecording { nextStreetButton }
+                    }
                 }
                 // Primary row — full-width action buttons, the most-used controls in the thumb zone.
-                if isRecording {
+                // Hidden during a run-out: no one can act, so the board just gets dealt to showdown.
+                if isRecording && !isRunOut {
                     actionButtons
                 }
             }
@@ -2275,6 +2481,53 @@ private struct ControlBar: View {
             .padding(.bottom, 14)
         }
         .background(Color.surface)
+    }
+
+    // MARK: Sizing chips (fill the utility row between Undo and Next Street on a Raise/Bet hold)
+
+    /// Horizontally-scrolling chip strip that occupies the flexible middle of the utility row. Undo
+    /// and Next Street stay pinned at the edges; only the chips scroll, so the action row never moves.
+    private var sizingScroll: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(sizingChips, id: \.self) { chip in
+                    sizingChipButton(chip)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func sizingChipButton(_ label: String) -> some View {
+        let c = sizeChipColors(label)
+        return Button(action: { onSizingChip(label) }) {
+            Text(label)
+                .font(.custom("Arial", size: 13))
+                .fontWeight(.bold)
+                .foregroundStyle(c.text)
+                .padding(.horizontal, 11)
+                .frame(height: 38)
+                .background(c.bg)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(c.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Chip colors by kind: light gold for All-in, gold for Pot, green for every `%` chip (sub-pot
+    /// AND overbets like 110%), purple for raise multiples (the `x` chips — only the raise strip has
+    /// them). Purple keeps the raises distinct from the gold Raise button and the gold All-in.
+    private func sizeChipColors(_ label: String) -> (bg: Color, border: Color, text: Color) {
+        if label == "All-in" {
+            return (Color(hex: "#2A1A05"), Color(hex: "#E8D5A3"), Color(hex: "#E8D5A3"))
+        }
+        if label == "Pot" {
+            return (Color(hex: "#252010"), Color(hex: "#C9A84C"), Color(hex: "#E8D5A3"))
+        }
+        if label.hasSuffix("%") {
+            return (Color(hex: "#111A0D"), Color(hex: "#3A6020"), Color(hex: "#7AB840"))
+        }
+        return (Color(hex: "#16101A"), Color(hex: "#7A3FA0"), Color(hex: "#B07AD0"))   // raise multiple
     }
 
     // MARK: Undo (utility row, left)
@@ -2358,19 +2611,97 @@ private struct ControlBar: View {
 
     @ViewBuilder
     private var actionButtons: some View {
-        let isBetContext = currentStreet == .preflop || openBetExists
+        // Bet context = preflop, or the seat on the clock faces a wager. Using the per-seat `facesBet`
+        // (not a global bet-level flag) means a seat that has just opened the betting keeps its own
+        // Check/Bet row — it never flips to Fold/Call/Raise while that player is still acting, so the
+        // held Bet button is never torn out mid-gesture. Matches the engine's context everywhere else.
+        let isBetContext = currentStreet == .preflop || facesBet
         if isBetContext {
             HStack(spacing: 10) {
                 actionChip("Fold",  type: .fold,  style: .destructive)
-                actionChip("Call",  type: .call,  style: .neutral)
-                actionChip("Raise", type: .raise, style: .aggressive)
+                // Facing a wager, Call is holdable → mark it all-in; a limp (no bet faced) stays plain.
+                if facesBet {
+                    callChip
+                } else {
+                    actionChip("Call", type: .call, style: .neutral)
+                }
+                aggressiveChip("Raise", type: .raise)
             }
         } else {
             HStack(spacing: 10) {
                 actionChip("Check", type: .check, style: .neutral)
-                actionChip("Bet",   type: .open,  style: .aggressive)
+                aggressiveChip("Bet",   type: .open)
             }
         }
+    }
+
+    /// The Raise/Bet button: a quick tap commits unsized (decisive, like any action chip); a 0.3s
+    /// hold opens the sizing row. Renders "selected" (solid gold) while its own sizing row is up.
+    private func aggressiveChip(_ label: String, type: ActionType) -> some View {
+        holdableChip(label, type: type,
+                     fg: Color.gold, bg: Color(hex: "#1A1508"), border: Color.gold.opacity(0.5),
+                     selFg: Color(hex: "#0D0D0D"), selBg: Color.gold,
+                     onHold: onAggressiveHold)
+    }
+
+    /// The Call button when facing a wager: a quick tap commits a normal call; a 0.3s hold opens the
+    /// single "All-in" chip to mark the call all-in. Renders "selected" (solid green) while its row
+    /// is up. (A limp uses the plain `actionChip` — a limp can't be all-in.)
+    private var callChip: some View {
+        holdableChip("Call", type: .call,
+                     fg: Color.textBody, bg: Color.surface2, border: Color.borderDark,
+                     selFg: Color(hex: "#07140A"), selBg: Color.winGreen,
+                     onHold: onCallHold)
+    }
+
+    /// A tap-or-hold action button. Quick tap → `onAction(type)` (decisive, unsized). 0.3s hold →
+    /// `onHold` (opens the sizing/all-in row). Tap and hold share one DragGesture(minimumDistance: 0)
+    /// — the same pattern the seats use — so they never fight over a layered recognizer. The button
+    /// shows its `sel*` colors while ITS action is the one being sized (`sizingSelectedType == type`).
+    @ViewBuilder
+    private func holdableChip(_ label: String, type: ActionType,
+                              fg: Color, bg: Color, border: Color,
+                              selFg: Color, selBg: Color,
+                              onHold: @escaping () -> Void) -> some View {
+        let isDisabled = highlightedSeat == nil
+        let selected = sizingActive && sizingSelectedType == type
+        Text(label)
+            .font(.custom("Arial", size: 16))
+            .fontWeight(.bold)
+            .foregroundStyle(selected ? selFg : fg)
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(selected ? selBg : bg)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(selected ? selBg : border, lineWidth: 1.5)
+            )
+            .opacity(isDisabled ? 0.35 : 1.0)
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        // Arm the hold timer once on touch-down (onChanged fires immediately at
+                        // minimumDistance 0). A second arm is blocked until this press ends.
+                        if holdTimer == nil && !holdFired {
+                            let work = DispatchWorkItem {
+                                holdFired = true
+                                onHold()
+                            }
+                            holdTimer = work
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+                        }
+                    }
+                    .onEnded { _ in
+                        holdTimer?.cancel()
+                        holdTimer = nil
+                        let wasHold = holdFired
+                        holdFired = false
+                        if !wasHold { onAction(type) }   // released before 0.3s → quick tap, unsized
+                    }
+            )
+            .disabled(isDisabled)
     }
 
     // Each chip fills its share of the row so Fold/Call/Raise span the full width.

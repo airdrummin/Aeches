@@ -39,21 +39,14 @@ struct TableOvalView: View {
     let positions: [Int: String]
     let onSeatTap: (Int) -> Void
     var onSeatSwipe: (Int, SwipeDirection) -> Void = { _, _ in }
-    var sizingStrip: (Int) -> [String] = { _ in [] }   // ordered size labels for a seat, [] = no sizing
-    var onSeatSize: (Int, String) -> Void = { _, _ in }
     var instruction: String? = nil
     var actionText: String? = nil
     var minHeight: CGFloat = 300   // default = the original fixed 300; the Record screen passes a
     var maxHeight: CGFloat = 300   // flexible range so the felt fills the slack / eases when needed.
 
-    // One unified gesture per seat classifies tap / swipe / hold-to-size — no competing gestures.
+    // One unified gesture per seat classifies tap vs. swipe — no competing gestures.
     @State private var touchSeat: Int? = nil        // seat under the active touch
-    @State private var touchMoved: Bool = false      // moved past the tap threshold (→ swipe, not hold)
-    @State private var holdActive: Bool = false      // hold-to-size engaged for this touch
-    @State private var holdTimer: DispatchWorkItem? = nil
-    @State private var sizingSeat: Int? = nil        // non-nil while the floating readout shows
-    @State private var sizingLabel: String = ""
-    @State private var sizingThumb: CGPoint = .zero
+    @State private var touchMoved: Bool = false      // moved past the tap threshold (→ swipe, not tap)
 
     // Rail gap at top — trim coordinates (0=right, 0.25=bottom, 0.5=left, 0.75=top)
     private let gapCenter: Double = 0.75
@@ -240,62 +233,32 @@ struct TableOvalView: View {
                         position: positions[i]
                     )
                     .position(x: pos.x, y: pos.y)
-                    // ONE gesture per seat classifies tap / swipe / hold-to-size. A single
+                    // ONE gesture per seat classifies tap vs. swipe. A single
                     // DragGesture(minimumDistance: 0) avoids the gesture-arbitration conflicts that
                     // break taps when .onTapGesture / .simultaneousGesture / .highPriorityGesture are
                     // layered together. At minimumDistance 0, onEnded fires even for a stationary tap.
                     // Lessons (do not "refactor" back into multiple recognizers): SwiftUI can't reliably
-                    // split tap/swipe/hold across separate gestures (iOS 18 worsens it), and gating the
-                    // swipe behind a shared "a hold happened" flag leaves it stuck and kills later swipes.
-                    // Tuning dials: swipe threshold 12pt, hold delay 0.3s, drag→size map in sizeIndex.
+                    // split tap/swipe across separate gestures (iOS 18 worsens it). Sizing is no longer
+                    // a seat gesture — it lives on the Raise/Bet control-bar buttons (see SizingOverhaul.md).
+                    // Tuning dial: swipe threshold 12pt.
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
                                 if touchSeat != i {
-                                    // New touch on this seat — arm a hold timer for sizing.
                                     touchSeat = i
                                     touchMoved = false
-                                    holdActive = false
-                                    let work = DispatchWorkItem {
-                                        guard touchSeat == i, !touchMoved else { return }
-                                        let strip = sizingStrip(i)
-                                        guard !strip.isEmpty else { return }
-                                        holdActive = true           // finger stayed put → hold-to-size
-                                        sizingSeat = i
-                                        sizingThumb = pos
-                                        sizingLabel = ""            // bubble shows once they slide out
-                                    }
-                                    holdTimer = work
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
                                 }
                                 let moved = (value.translation.width * value.translation.width
                                              + value.translation.height * value.translation.height).squareRoot()
-                                if holdActive {
-                                    let strip = sizingStrip(i)
-                                    sizingThumb = CGPoint(x: pos.x + value.translation.width,
-                                                          y: pos.y + value.translation.height)
-                                    sizingLabel = Self.sizeLabel(for: value.translation, strip: strip)
-                                } else if moved > 12 {
-                                    touchMoved = true               // it's a drag → cancel the hold
-                                    holdTimer?.cancel()
-                                }
+                                if moved > 12 { touchMoved = true }   // it's a drag → swipe, not tap
                             }
                             .onEnded { value in
-                                holdTimer?.cancel()
                                 let seat = touchSeat ?? i
-                                let wasHold = holdActive
                                 let t = value.translation
                                 let moved = (t.width * t.width + t.height * t.height).squareRoot()
-                                // Reset transient touch state.
-                                touchSeat = nil; touchMoved = false; holdActive = false
-                                sizingSeat = nil; sizingLabel = ""
+                                touchSeat = nil; touchMoved = false
 
-                                if wasHold {
-                                    let strip = sizingStrip(seat)
-                                    if let label = Self.committedLabel(for: t, strip: strip) {
-                                        onSeatSize(seat, label)     // else released in cancel zone → nothing
-                                    }
-                                } else if moved > 12 {
+                                if moved > 12 {
                                     if abs(t.width) > abs(t.height) {
                                         onSeatSwipe(seat, t.width > 0 ? .right : .left)
                                     } else {
@@ -345,19 +308,6 @@ struct TableOvalView: View {
                 .shadow(color: Color.black.opacity(0.8), radius: 4, y: 2)
                 .position(x: cx, y: cy - ry - railW * 0.1)
 
-                // ── Floating sizing readout (follows the thumb during a hold) ──
-                if sizingSeat != nil, !sizingLabel.isEmpty {
-                    Text(sizingLabel)
-                        .font(.system(size: 19, weight: .bold))
-                        .foregroundStyle(Color(hex: "#E8D5A3"))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Capsule().fill(Color(hex: "#1C1C1C")))
-                        .overlay(Capsule().stroke(Color(hex: "#C9A84C"), lineWidth: 1.5))
-                        .position(x: sizingThumb.x, y: sizingThumb.y - 46)
-                        .allowsHitTesting(false)
-                }
-
             }
             .frame(width: w, height: h)
         }
@@ -366,26 +316,6 @@ struct TableOvalView: View {
         .animation(.easeInOut(duration: 0.35), value: instruction)
     }
 
-    // MARK: - Hold-to-size mapping (drag distance → strip index)
-
-    /// Index into a sizing strip from the drag, or nil when the thumb is still in the cancel
-    /// zone (near the seat). Dragging further out (up / right) grows the value.
-    private static func sizeIndex(for t: CGSize, count: Int) -> Int? {
-        let outward = max(-t.height, t.width)
-        guard outward >= 12 else { return nil }              // cancel zone — over the seat
-        let frac = min(max((outward - 12) / 190, 0), 1)
-        return Int((frac * CGFloat(count - 1)).rounded())
-    }
-
-    private static func sizeLabel(for t: CGSize, strip: [String]) -> String {
-        guard let i = sizeIndex(for: t, count: strip.count) else { return "" }
-        return strip[i]
-    }
-
-    private static func committedLabel(for t: CGSize, strip: [String]) -> String? {
-        guard let i = sizeIndex(for: t, count: strip.count) else { return nil }
-        return strip[i]
-    }
 }
 
 // MARK: - Seat Button View
@@ -396,6 +326,7 @@ struct SeatState {
     var betLevel: Int = 0
     var priorActions: [Action] = []  // all actions this street except the current one, oldest first
     var sizeLabel: String? = nil     // size attached to the current bet/raise, e.g. "2.5x", "40%"
+    var isAllIn: Bool = false        // seat is all-in (no chips left) — persists across streets
 }
 
 struct SeatButtonView: View {
@@ -412,6 +343,9 @@ struct SeatButtonView: View {
     private var bg: LinearGradient {
         if isFoldedOut {
             return LinearGradient(colors: [Color(hex: "#111111"), Color(hex: "#0A0A0A")], startPoint: .top, endPoint: .bottom)
+        }
+        if state?.isAllIn == true {
+            return LinearGradient(colors: [Color(hex: "#2E1F08"), Color(hex: "#1C1305")], startPoint: .top, endPoint: .bottom)
         }
         switch state?.action {
         case .fold:
@@ -431,6 +365,7 @@ struct SeatButtonView: View {
     private var borderColor: Color {
         if isFoldedOut { return Color(hex: "#2A2A2A") }
         if isActive { return Color.white }
+        if state?.isAllIn == true { return Color(hex: "#E8943C") }   // amber — committed, persists
         if isHero {
             return state?.action == .fold ? Color.foldRed : Color.goldLight
         }
@@ -445,6 +380,7 @@ struct SeatButtonView: View {
 
     private var labelColor: Color {
         if isFoldedOut { return Color(hex: "#444444") }
+        if state?.isAllIn == true { return Color(hex: "#F5C277") }   // amber action symbol when all-in
         switch state?.action {
         case .fold:          return Color.foldRed
         case .call, .check:  return Color.winGreen
@@ -585,9 +521,10 @@ struct SeatButtonView: View {
 
     /// Size pill on the seat's bottom rim — shown only when the current action carries a size.
     /// Symbols are untouched; this rides the bottom edge, clear of the top-edge prior-action badges.
+    /// Suppressed for an all-in seat — the amber ALL IN pill replaces it (sizing == "All-in" anyway).
     @ViewBuilder
     private var sizeOverlay: some View {
-        if let label = state?.sizeLabel, !isFoldedOut {
+        if let label = state?.sizeLabel, !isFoldedOut, state?.isAllIn != true {
             Text(label)
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(Color(hex: "#E8D5A3"))
@@ -596,6 +533,21 @@ struct SeatButtonView: View {
                 .frame(minWidth: 18)
                 .background(Capsule().fill(Color(hex: "#14110A")))
                 .overlay(Capsule().stroke(Color(hex: "#C9A84C"), lineWidth: 1.2))
+                .offset(y: size * 0.5)
+        }
+    }
+
+    /// Amber ALL IN pill on the seat's bottom rim, persisting every street once the seat is all-in.
+    @ViewBuilder
+    private var allInOverlay: some View {
+        if state?.isAllIn == true, !isFoldedOut {
+            Text("ALL IN")
+                .font(.system(size: 7, weight: .black))
+                .tracking(0.3)
+                .foregroundStyle(Color(hex: "#2A1B08"))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1.5)
+                .background(Capsule().fill(Color(hex: "#E8943C")))
                 .offset(y: size * 0.5)
         }
     }
@@ -641,6 +593,7 @@ struct SeatButtonView: View {
                 .opacity(isFoldedOut ? 0.35 : 1.0)
                 .overlay(badgeOverlay)
                 .overlay(sizeOverlay)
+                .overlay(allInOverlay)
 
             VStack(spacing: 1) {
                 actionLabel

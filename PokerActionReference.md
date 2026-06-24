@@ -115,6 +115,49 @@ If at any point only one active player remains (all others folded), the hand end
 
 ---
 
+## All-In Players
+
+A player who is **all-in** has no chips left and takes **no further action** for the rest
+of the hand, on any street. They stay *in* the hand (eligible for showdown), just done
+acting.
+
+**Recording.** An all-in is any action carrying the `All-in` size marker — an aggressive
+all-in (Bet/Raise sized `All-in`) or a **call that committed the last chips** (a call
+marked `All-in`). All-in is derived from the log and persists across streets.
+
+**The two sets that matter:**
+- *In the hand* = not folded. Drives fold-out (one left) and showdown eligibility.
+- *Players with chips* = not folded AND not all-in. The only seats that can still act —
+  used by `owesAction`, street-close detection, and the highlight ring. All-in seats are
+  skipped everywhere a seat is asked to act.
+
+**Continuation rule (after every betting round):**
+```
+in-hand == 1                          → fold-out (hand ends)
+players-with-chips >= 2               → next street is played; all-in seats skipped
+players-with-chips <= 1 (in-hand >=2) → RUN-OUT: deal the remaining board with no
+                                        betting, straight to showdown
+```
+This single count replaces any need to reason about who "covers" whom — the user marks
+each all-in (including a call that goes all-in) and the count decides. Continuing a hand
+needs **≥2 players with chips**; the moment that drops to ≤1, everything left is just
+board cards.
+
+**Street close with an all-in.** The current street still closes normally first — every
+player *with chips* (except the last aggressor) must call or fold the standing bet,
+including responding to an all-in. Only once the betting is settled does the run-out begin.
+A lone chip-holder who still owes a response to a fresh all-in is **not** yet a run-out.
+
+In a run-out the hand is decided, so the recorder does **not** walk street-by-street: the
+Next Street button reads **Showdown** and jumps straight to the Win / Lose / Chop overlay
+(the same showdown the river reaches). The run-out board is entered in the always-live card
+strip, before or after picking the result.
+
+See `AllInFlow.md` for the full spec, worked scenarios, and UI (the amber `ALL IN` seat
+badge, the hold-Call→All-in input, and run-out mode).
+
+---
+
 ## Showdown
 
 Triggered when the river action closes and **two or more players remain active**.
@@ -201,10 +244,10 @@ There is no undo via seat tap in either model; use the Undo button instead.
 
 **Swipes** are a decisive shortcut layered over this same model: a directional swipe records a chosen
 action (← Fold, ↑ Raise, → Bet, ↓ Call/Check) in one gesture — picking the action directly instead
-of cycling to it — and a press-and-hold attaches a size to a bet/raise. After recording, a swipe
-**advances the ring to the next player without seeding any action on it** — the next seat enters
-empty/waiting. This is identical to an action-button press; both share one settle path
-(`settleAfterCommit`). Crucially the swipe does **not** seed the next seat (that would commit a
+of cycling to it. Swipes are **always unsized** (sizing lives on the Raise/Bet button hold, below).
+After recording, a swipe **advances the ring to the next player without seeding any action on it** —
+the next seat enters empty/waiting. This is identical to an action-button press; both share one settle
+path (`settleAfterCommit`). Crucially the swipe does **not** seed the next seat (that would commit a
 decision the user never made — tapping past an empty seat later auto-folds/-checks it correctly).
 Swipes follow the same routing and guards above and **never advance the street** — a closing swipe
 holds on the acting seat and lights the Next Street button.
@@ -212,6 +255,23 @@ holds on the acting seat and lights the Next Street button.
 **Action buttons** (Fold/Call/Raise · Check/Bet) act on the seat on the clock, then settle exactly
 like a swipe (record → advance the ring to the next player, no seed). The only control that advances
 a street is the **Next Street button**; no action button, tap, or swipe ever does.
+
+**Hold-to-size on Raise / Bet.** Holding the Raise or Bet button for 0.3s reveals a horizontally-
+scrolling sizing chip strip that fills the utility row **to the right of Undo**. Undo stays pinned;
+the **Next Street button is hidden while sizing** (a staged raise/bet never closes the street, so it
+would be disabled anyway), giving the chips the full width. The action row never shifts. The
+aggressive action is recorded **unsized immediately** (the same way
+cycling writes a raise the moment you cycle to it) and the seat stays on the clock — the ring does
+*not* advance yet. Tapping a size chip replaces that staged action with a sized one (same action
+type, read back from the log) and then settles exactly like a quick tap (advance the ring, light
+Next Street on a close). Because the staged action is a normal log entry, **Undo needs no special
+case** — one press both dismisses the row and peels the staged raise/bet, returning the seat to its
+previous state. A **quick tap** on Raise/Bet (released before 0.3s) commits unsized and advances
+immediately — the existing decisive behavior is unchanged. Any other committed input (a different
+action button, a seat tap, a swipe, Next Street) also dismisses the row. Sizing is notation only —
+no chip/pot math. Tap classification uses the same single `DragGesture(minimumDistance: 0)` pattern
+as the seats. (Implemented in `HandEntryView.swift` `ControlBar` + the `handleAggressiveHold` /
+`handleSizingChip` routing.)
 
 **The pulse cue.** Exactly one thing pulses at a time: the seat on the clock. When a committed input
 (button/swipe) completes the betting round, the acting seat's highlight clears and the **Next Street
