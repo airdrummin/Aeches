@@ -867,8 +867,24 @@ struct HandEntryView: View {
     private var seatActions: [Int: SeatState] {
         var result: [Int: SeatState] = [:]
 
-        // Ghost seats for folds that happened on prior streets
-        let foldedThisStreet = Set(actionsThisStreet.filter { $0.actionType == .fold }.map { $0.seatIndex })
+        // The street whose actions the table renders. Normally the live street (`actionsThisStreet`).
+        // But a run-out fast-forwards `currentStreet` to the river and empties `actionsThisStreet`
+        // (advanceStreetOrShowdown → closeStreet), burying the last contested street's actions in
+        // `streets` — so a non-all-in caller would render actionless at the frozen table. At a closed
+        // hand we therefore fall back to the last street that actually had action, matching the
+        // transcript (which already reads `streets`). The fallback is gated on a terminal phase: an
+        // empty live street is also the normal state right after a street advances, and there we must
+        // keep it empty (a fresh street), not resurrect the prior street's actions.
+        let displayStreetActions: [Action] = {
+            if !actionsThisStreet.isEmpty { return actionsThisStreet }
+            if phase == .showdown || phase == .handClosed {
+                return streets.last(where: { !$0.actions.isEmpty })?.actions ?? []
+            }
+            return actionsThisStreet   // empty + recording → genuinely fresh street, keep it empty
+        }()
+
+        // Ghost seats for folds that happened on prior streets (relative to the displayed street).
+        let foldedThisStreet = Set(displayStreetActions.filter { $0.actionType == .fold }.map { $0.seatIndex })
         for seat in foldedSeats where !foldedThisStreet.contains(seat) {
             result[seat] = SeatState(action: .foldedOut)
         }
@@ -876,7 +892,7 @@ struct HandEntryView: View {
         // Build each seat's action history this street in log order, capturing the bet level frozen
         // at each entry so prior aggression keeps its pip layout.
         var histories: [Int: [(action: SeatState.Action, betLevel: Int)]] = [:]
-        for action in actionsThisStreet {
+        for action in displayStreetActions {
             let seatAction: SeatState.Action
             switch action.actionType {
             case .fold:  seatAction = .fold
@@ -885,7 +901,7 @@ struct HandEntryView: View {
             case .open:  seatAction = .open
             case .raise: seatAction = .raise
             }
-            let levelAtThisPoint = actionsThisStreet
+            let levelAtThisPoint = displayStreetActions
                 .prefix(while: { $0.id != action.id })
                 .filter { $0.actionType == .open || $0.actionType == .raise }
                 .count + (action.actionType == .open || action.actionType == .raise ? 1 : 0)
@@ -906,7 +922,7 @@ struct HandEntryView: View {
             }
             let current = history.last!
             let prior = history.dropLast().map { $0.action }
-            let sizeLabel = actionsThisStreet.last { $0.seatIndex == seat }?.sizing?.label
+            let sizeLabel = displayStreetActions.last { $0.seatIndex == seat }?.sizing?.label
             result[seat] = SeatState(
                 action: current.action,
                 betLevel: current.betLevel,

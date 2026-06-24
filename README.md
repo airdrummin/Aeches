@@ -121,7 +121,7 @@ Both halves operate independently. The user can fill in cards before recording a
    - **Fold-out**: when all but one player folds at any point, the hand closes immediately. No user action required.
    - **Showdown**: when the river closes with 2+ active players, a **Win / Lose / Chop** overlay appears centered on the table. Tap the outcome to close.
 
-7. **Summary state** — the hand stays on its number (e.g. "Hand #1"). The **table stays frozen on the finished hand** — seat actions, positions, dealer button, and the final street all remain on screen so the completed hand reads clearly (the river action stays visible). The outcome renders as felt text in the center:
+7. **Summary state** — the hand stays on its number (e.g. "Hand #1"). The **table stays frozen on the finished hand** — seat actions, positions, dealer button, and the final street all remain on screen so the completed hand reads clearly (the last street with action stays visible — the river at a normal showdown, or the last contested street in an all-in run-out, where the betting ended before the board was dealt out). The outcome renders as felt text in the center:
    - "You win"
    - "You lose"
    - "Chop"

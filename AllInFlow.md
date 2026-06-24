@@ -104,6 +104,18 @@ So we do **not** walk street-by-street:
   hand closes; the transcript (which renders streets up to `currentStreet`, now `.river`)
   shows them whenever they're entered.
 
+### Frozen table at a run-out close
+The run-out walk closes every remaining street, which empties `actionsThisStreet` (its actions
+move into `streets`). The seat visuals (`seatActions`) normally render only the live street, so
+at a closed run-out a **non-all-in caller** (a seat that called but kept chips) would render
+actionless — its action is now buried in `streets`. To keep the frozen table reading the
+finished hand correctly, `seatActions` falls back to the **last street that had action** when
+`actionsThisStreet` is empty *and the hand is closed* (`phase == .showdown || .handClosed`).
+This mirrors the transcript, which already reads `streets`, so the two renderers always agree.
+The fallback is gated on the terminal phase on purpose: an empty live street is also the normal
+state right after a street advances, and there it must stay empty (a fresh street). All-in seats
+are unaffected — their amber badge is derived from the whole-hand log regardless of street.
+
 ---
 
 ## Code touch-points
@@ -114,6 +126,7 @@ So we do **not** walk street-by-street:
 | Acting set | `owesAction`, `streetIsClosed`, `nextActiveSeat`, `nextOwingSeat`, `firstActorAfterClose` use `playersWithChips` |
 | All-in can't be acted on | `handlePreflopTap`, `handlePostflopTap`, `routeDecisive`, `autoResolveSkipped` guard `allInSeats` |
 | Run-out highlight | `closeStreet` sets `highlightedSeat = isRunOut ? nil : firstActorAfterClose()` |
+| Frozen-table actions at close | `seatActions` `displayStreetActions` — falls back to the last non-empty street when `actionsThisStreet` is empty and the hand is closed (so a non-all-in caller still shows) |
 | Badge | `seatActions` sets `SeatState.isAllIn` + a persistent badge for seats with no action this street |
 | Call-all-in input | `handleCallHold`, `sizingChips` (`["All-in"]` for `.call`), `sizingSelectedType`, `callChip` |
 | Transcript | `actionToken` → `call (all-in)` |
