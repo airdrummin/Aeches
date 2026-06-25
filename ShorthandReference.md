@@ -100,17 +100,27 @@ so labels are stable throughout the hand even as players fold:
 Every transcript opens with a header derived from what is currently known:
 
 ```
-Hand #N - [hole cards] - [hero position]
+Hand #N - [hole cards] - [hero position] - [effective stack]
 ```
 
 - **Hand number** is always present.
 - **Hero position** is added once the dealer button is placed (position is button-relative).
 - **Hole cards** are added once entered; they appear between the hand number and the position.
+- **Effective stack** is added once entered, trailing the header as `Nbb eff` (always big blinds,
+  1–999). It is **independent** of cards/position — it shows the moment it's set, even before the
+  button is placed (`Hand #3 - 50bb eff`).
+- If nothing else is entered: `Hand #3` (or `Hand #3 - 50bb eff` with just the stack)
 - If cards are not yet entered: `Hand #3 - CO`
 - If cards are entered: `Hand #3 - JTss - CO`
+- Fully populated: `Hand #3 - JTss - CO - 50bb eff`
 
-Hero's position and hole cards are **declared once in the header only**. They do not appear again
-in the action lines.
+Hero's position, hole cards, and effective stack are **declared once in the header only**. They do
+not appear again in the action lines.
+
+> Effective stack is a single user-entered number — the shortest stack still in the hand by the
+> flop — recorded *in lieu of* tracking every player's stack. It is hand metadata (not part of the
+> action log): set via the "Eff" chip beside the transcript title → a docked numeric keypad,
+> untouched by Undo, blank every hand. See README "Effective Stack".
 
 ---
 
@@ -255,9 +265,10 @@ Js7s2h. Hero 33%. CO call.
 
 ## 11. Style decisions (locked)
 
-- **A. Header:** `Hand #N - [cards] - [position]` always leads. Hero position and hole cards declared
-  there only — never inline in the action text. Cards slot in once entered; position slots in once
-  button is placed.
+- **A. Header:** `Hand #N - [cards] - [position] - [Nbb eff]` always leads. Hero position, hole
+  cards, and effective stack declared there only — never inline in the action text. Cards slot in
+  once entered; position slots in once button is placed; the stack trails as `Nbb eff` once entered
+  (independent of the rest).
 - **B. Hero label:** `Hero` always, in all action lines. No "Hero - CO" inline declaration.
 - **C. Villain label:** position throughout (`BTN`, `HJ`, etc.). Position is stable for the full
   hand — frozen using the full table ring at record time, not recalculated as players fold.
@@ -284,7 +295,9 @@ Js7s2h. Hero 33%. CO call.
   Output: the multi-line string. No new `@State` — computed like `seatActions` so it tracks
   Rewind/edits for free.
 - **Header** is built first: `Hand #N`, then append ` - [pos]` once `buttonSeat` is set, then
-  insert cards once `groupNotation(.hole)` is non-empty.
+  insert cards once `groupNotation(.hole)` is non-empty, then append ` - [N]bb eff` once
+  `effectiveStack` is non-nil (this last segment is independent — it appends regardless of whether
+  the button/cards are set).
 - **Position stability.** `positionFor(seat:)` always calls `calculatePositions` with
   `Array(0..<tableSize)` — never `activeSeatSequence`. This prevents the folded-BTN bug where
   `calculatePositions` returns `[:]` and every post-flop position resolves to `"?"`.

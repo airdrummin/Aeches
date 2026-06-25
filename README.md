@@ -195,6 +195,20 @@ A running **shorthand text** of the hand renders in the gap below the strip (the
 - Grammar (hero label, verb elision, check-around collapse, limp, bare board, showdown result) is defined in full in **`ShorthandReference.md`** — the authoritative source for both the card notation and the action shorthand.
 - Example: `Hero - UTG raise AJo. BTN call.` / `Q53r. Hero chk. BTN 30%. Hero 2.2x. BTN call.` / `Jh. chk chk.` / `5x. Hero 90%. BTN fold.`
 
+### Effective Stack
+
+A single user-entered number — the shortest stack still in the hand by the flop — recorded **in lieu of** tracking every player's stack (way simpler, no per-seat stack entry). Always in **big blinds** (1–999), it trails the transcript header as `Nbb eff`:
+
+```
+Hand #1 - QJdd - MP - 50bb eff
+```
+
+- **Where:** an **"Eff" chip** sits beside the **HAND HISTORY** title in the transcript header. Empty it reads a faint dashed **`+ Eff`** (tap to add — same plus/empty-slot language as **+ New Hand** and the empty card frames); set it reads a solid gold **`50bb`**. Tapping it either way opens the input.
+- **Input:** a **docked numeric keypad** (digits, `⌫`, `✓`) that slides up over the bottom section — the same dock/grab-handle pattern as the card picker, dismissed by the handle (tap / swipe down) or `✓`. Capped at 3 digits, no leading zero. The table above stays put and tappable. **Re-opening a set value shows it as a preview, but the first digit typed clears it and starts fresh** (same as typing a rank into a full card group); backspacing instead keeps the value and edits it in place.
+- **It is hand metadata, like the cards** — *not* part of the action log: **untouched by Undo** (fix a wrong number in the keypad itself), and **blank every hand** (no carry-forward). It appears in the header the moment it's set, independent of cards/position (`Hand #1 - 50bb eff` even before the button is placed).
+- **Availability:** the chip is reachable in every playing phase the transcript header shows (recording, showdown, hand-closed) — addable or editable at any time, like the rest of the app.
+- Persisted to `Hand.effectiveStack` (stored as the BB count). See `ShorthandReference.md §4` for the header grammar.
+
 ### Villain Profiles *(not yet implemented)*
 
 - Quick tags: OMC, LAG, TAG, Fish, Reg, Unknown
@@ -308,6 +322,7 @@ A running **shorthand text** of the hand renders in the gap below the strip (the
 - Turn/river **board-suit count** — repeat the suit to mark flush draws/completions (`4ss` / `4sss`), via suit re-tap or the suit-skinned pip-layout `×N` buttons (turn `2–4`, river `3–5`)
 - **Incognito mode** — session toggle (eye by the HOLE label) hides the hero's hole faces behind a card back and blurs the hole read-out; board cards stay public (see Incognito Mode)
 - Hand shorthand transcript — running Courier text of the hand in the same gap, a pure render of the action log with a Copy-to-clipboard button; grammar in `ShorthandReference.md`
+- Effective stack — an "Eff" chip beside the transcript title (faint `+ Eff` when empty, gold `Nbb` when set) opens a docked numeric keypad; trails the header as `Nbb eff` (always big blinds, ≤999). Hand metadata like the cards: Undo-independent, blank every hand, persisted to `Hand.effectiveStack`
 - Aggression symbols: → = post-flop bet; raise pip-layouts: ↑↑ side-by-side (2-bet), triangle (3-bet), 2×2 grid (4-bet), ↑ + badge number (5-bet+)
 - Bet/raise sizing via Raise/Bet button hold — a 0.3s hold reveals a horizontally-scrolling, color-coded sizing chip strip in the utility row to the right of Undo (Next Street is hidden during sizing to give the chips full width; the action row never moves); tapping a chip records the sized action and advances. Quick taps and swipes stay unsized; Undo peels a staged raise in one press. Size shows as a pill on the seat's bottom rim (see `SizingOverhaul.md`)
 - All-in flow — an all-in (Bet/Raise sized `All-in`, or a **call** marked all-in via a Call-button hold) marks the seat with a persistent amber `ALL IN` badge and skips it from all further betting. The hand keeps playing only while ≥2 players have chips; when ≤1 does, it enters **run-out** (action row hidden, felt reads `ALL IN`) and the pulsing **Showdown** button jumps straight to the Win/Lose/Chop overlay — no street-by-street walk, since the hand is decided. The run-out board is entered in the always-live card strip, before or after picking the result. No chip/pot math — the user marks each all-in and a count drives continue-vs-run-out (see `AllInFlow.md`)
@@ -480,7 +495,7 @@ streets:          [Street] // only streets that were played
 outcome:          Outcome? // nil if hand abandoned or outcome not recorded
 potSize:          Double?
 potUnit:          PotUnit?
-effectiveStack:   Double?  // optional, in same unit as potUnit
+effectiveStack:   Double?  // optional — the hand entry UI records this in big blinds (shortest stack by the flop)
 commentary:       String?
 ```
 

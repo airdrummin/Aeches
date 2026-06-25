@@ -79,6 +79,14 @@ struct HandEntryView: View {
     // True from skipHand() until Undo or next deal: lets undoLastAction() restore without peeling an action.
     @State private var lastHandWasSkipped: Bool = false
 
+    // Effective stack (per-hand, in big blinds) — set via the "Eff" chip beside the transcript title,
+    // entered on a docked numeric keypad. Like the card groups it is hand metadata, not part of the
+    // action log: untouched by Undo, fixed only in the keypad, cleared on New Hand. nil = unset.
+    @State private var effectiveStack: Int? = nil
+    @State private var effEntryVisible: Bool = false   // keypad shown as a bottom overlay over the dock (like the transcript drawer)
+    @State private var effDraft: String = ""           // digits being typed (≤3); committed to effectiveStack on ✓
+    @State private var effReplaceOnInput: Bool = false // re-opened a set value → the next digit clears it and starts fresh
+
     @State private var phase: Phase = .selectSeat
 
     enum Phase { case selectSeat, placingButton, recordingHand, showdown, handClosed }
@@ -391,6 +399,14 @@ struct HandEntryView: View {
                             transcriptDrawer
                                 .transition(.move(edge: .bottom))
                         }
+
+                        // Eff-stack keypad — like the drawer, slides up over the bottom section only
+                        // (cards + control region), so it has room for full-size keys and the table
+                        // above never shifts. Tapping the table / strip behind it still works.
+                        if effEntryVisible {
+                            effStackPanel
+                                .transition(.move(edge: .bottom))
+                        }
                     }
                 } else {
                     Spacer(minLength: 0)
@@ -398,6 +414,7 @@ struct HandEntryView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: entryStreet != nil)
+        .animation(.easeInOut(duration: 0.2), value: effEntryVisible)
         .animation(.easeInOut(duration: 0.2), value: phase)
         .animation(.easeInOut(duration: 0.25), value: transcriptExpanded)
     }
@@ -1809,6 +1826,7 @@ struct HandEntryView: View {
                     .font(.system(size: 10, weight: .bold))
                     .tracking(1.5)
                     .foregroundStyle(Color.gold)
+                effChip
                 Spacer()
                 Button(action: copyShorthand) {
                     HStack(spacing: 4) {
@@ -1821,9 +1839,12 @@ struct HandEntryView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .overlay(Capsule().stroke(transcriptCopied ? Color.winGreen.opacity(0.4) : Color.clear, lineWidth: 1))
+                    // Idle, the label collapses to just the ~11pt icon — far below a 44pt finger, so
+                    // taps miss and it feels like it needs a hold. Reserve a real tap target.
+                    .frame(minWidth: 44, minHeight: 36)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .contentShape(Rectangle())
                 .disabled(handShorthand.isEmpty)
                 .opacity(handShorthand.isEmpty ? 0.35 : 1.0)
                 Button(action: { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = true } }) {
@@ -1925,6 +1946,176 @@ struct HandEntryView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             withAnimation(.easeInOut(duration: 0.15)) { transcriptCopied = false }
         }
+    }
+
+    // MARK: - Effective Stack (chip + docked keypad)
+
+    /// The eff-stack chip beside the HAND HISTORY title. Empty → a dashed "+ Eff" (tap to add — the
+    /// same plus/empty-slot language as +New Hand and the empty card frames); set → a solid gold
+    /// "Nbb". Either way it opens the docked keypad. Available in every playing phase the transcript
+    /// header is (recording, showdown, hand-closed) — i.e. whenever the picker/keypad isn't already up.
+    private var effChip: some View {
+        Button(action: openEffEntry) {
+            if let eff = effectiveStack {
+                Text("\(eff)bb")
+                    .font(.custom("Arial", size: 11))
+                    .fontWeight(.bold)
+                    .foregroundStyle(Color.goldLight)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color(hex: "#14110A")))
+                    .overlay(Capsule().stroke(Color.gold, lineWidth: 1))
+            } else {
+                Text("+ Eff")
+                    .font(.custom("Arial", size: 11))
+                    .fontWeight(.bold)
+                    .foregroundStyle(Color(hex: "#B5A36A"))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .overlay(Capsule().stroke(Color(hex: "#7A6A3A"),
+                                              style: StrokeStyle(lineWidth: 1, dash: [3, 2.5])))
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Opening the keypad: dismiss the card picker + sizing row (so nothing competes in the dock),
+    /// seed the draft from any existing value (so re-tapping edits in place), and show the keypad.
+    private func openEffEntry() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            entryStreet = nil
+            sizingRowVisible = false
+            effDraft = effectiveStack.map(String.init) ?? ""
+            // A re-opened set value is shown as a preview but is display-only: the first digit clears
+            // it and starts a fresh number (same as typing a rank into a full card group). Backspacing
+            // instead keeps the value and edits it in place. Nothing to replace when opening empty.
+            effReplaceOnInput = !effDraft.isEmpty
+            effEntryVisible = true
+        }
+    }
+
+    private func closeEffEntry() {
+        withAnimation(.easeInOut(duration: 0.2)) { effEntryVisible = false }
+    }
+
+    /// Commit the draft: an empty draft clears the stack (nil); otherwise set it. Then dismiss.
+    private func commitEffEntry() {
+        effectiveStack = effDraft.isEmpty ? nil : Int(effDraft)
+        closeEffEntry()
+    }
+
+    private func effDigit(_ d: String) {
+        if effReplaceOnInput { effDraft = ""; effReplaceOnInput = false }   // first digit replaces the re-opened value
+        if d == "0" && effDraft.isEmpty { return }   // no leading zero
+        guard effDraft.count < 3 else { return }      // capped at 3 digits (≤999bb)
+        effDraft.append(d)
+    }
+
+    private func effBackspace() {
+        effReplaceOnInput = false                     // editing in place now — keep the value, don't replace
+        if !effDraft.isEmpty { effDraft.removeLast() }
+    }
+
+    /// The docked eff-stack keypad — same grab-handle pattern as the card picker, but presented (in
+    /// `body`) as a bottom overlay over the strip + control region (like the transcript drawer), so it
+    /// has room for full-size keys and the table above never shifts. Grab handle (tap / swipe down)
+    /// cancels without committing; ✓ commits; ⌫ deletes; digits build the draft (live preview above).
+    private var effStackPanel: some View {
+        VStack(spacing: 0) {
+            effGrabHandle
+
+            Spacer(minLength: 8)
+
+            VStack(spacing: 2) {
+                Text("EFFECTIVE STACK")
+                    .font(.system(size: 9, weight: .bold))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.textMuted)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(effDraft.isEmpty ? "—" : effDraft)
+                        .font(.custom("Georgia", size: 30))
+                        .fontWeight(.bold)
+                        .foregroundStyle(Color.goldLight)
+                    Text("bb")
+                        .font(.custom("Arial", size: 14))
+                        .foregroundStyle(Color.textMuted)
+                }
+            }
+
+            Spacer(minLength: 10)
+
+            VStack(spacing: 8) {
+                effRow(["1", "2", "3"])
+                effRow(["4", "5", "6"])
+                effRow(["7", "8", "9"])
+                HStack(spacing: 8) {
+                    effActionKey(system: "delete.left", tint: Color.foldRed) { effBackspace() }
+                    effDigitKey("0")
+                    effActionKey(system: "checkmark", tint: Color.gold, filled: true) { commitEffEntry() }
+                }
+            }
+
+            Spacer(minLength: 6)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 14)
+        .background(Color.surface)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.borderDark.opacity(0.6)).frame(height: 1)
+        }
+    }
+
+    /// Grab handle for the eff keypad — tap or swipe down to dismiss WITHOUT committing (matches the
+    /// card picker's handle). The value only changes via ✓.
+    private var effGrabHandle: some View {
+        Capsule()
+            .fill(Color.borderDark)
+            .frame(width: 40, height: 5)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .onTapGesture { closeEffEntry() }
+            .gesture(
+                DragGesture(minimumDistance: 10)
+                    .onEnded { v in if v.translation.height > 12 { closeEffEntry() } }
+            )
+    }
+
+    private func effRow(_ digits: [String]) -> some View {
+        HStack(spacing: 8) {
+            ForEach(digits, id: \.self) { effDigitKey($0) }
+        }
+    }
+
+    private func effDigitKey(_ d: String) -> some View {
+        Button(action: { effDigit(d) }) {
+            Text(d)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(Color.textBody)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(Color.surface2)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.borderDark, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func effActionKey(system: String, tint: Color, filled: Bool = false,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(filled ? Color(hex: "#0D0D0D") : tint)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(filled ? Color.gold : Color.surface2)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .stroke(filled ? Color.goldLight : tint.opacity(0.4), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -2035,6 +2226,7 @@ struct HandEntryView: View {
     /// finished group is cleared only when you start typing a new rank (see `rankTapped`).
     private func openCardEntry(_ street: CardStreet) {
         entryStreet = street
+        effEntryVisible = false         // close the eff keypad so the two never show at once
         let g = group(for: street)
         entryLocked = g.isFull          // re-opening a finished group → display-only until a rank is typed
         focusIndex = g.firstEmptyIndex ?? 0
@@ -2230,6 +2422,9 @@ struct HandEntryView: View {
                 header += cards.isEmpty ? " - \(pos)" : " - \(cards) - \(pos)"
             }
         }
+        // Effective stack trails the header, independent of cards/position so it shows the moment it's
+        // set (e.g. "Hand #1 - 50bb eff" even before the button is placed). Always big blinds.
+        if let eff = effectiveStack { header += " - \(eff)bb eff" }
         lines.append(header)
         lines.append("")   // blank line separates the header from the action lines
 
@@ -2369,6 +2564,10 @@ struct HandEntryView: View {
         handCloseSummary = ""
         streetClosedDecisively = false
         lastHandWasSkipped = false
+        effectiveStack = nil       // blank every hand (no carry-forward)
+        effEntryVisible = false
+        effDraft = ""
+        effReplaceOnInput = false
     }
 
     private func saveCurrentHand(outcome: Outcome?) {
@@ -2388,7 +2587,7 @@ struct HandEntryView: View {
             outcome: outcome,
             potSize: nil,
             potUnit: session.potUnit,
-            effectiveStack: nil,
+            effectiveStack: effectiveStack.map(Double.init),   // hand metadata, in big blinds
             commentary: nil
         )
         savedHands.append(hand)
