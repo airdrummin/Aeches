@@ -298,7 +298,9 @@ struct HandEntryView: View {
                     }
                 }
                 .overlay(alignment: .topTrailing) {
-                    if isPlayingPhase {
+                    // Move is "next hand, new seat" — only at the ended state (handClosed) and the
+                    // pre-hand seat-fix state (placingButton). Mid-hand you end via Skip first.
+                    if phase == .placingButton || phase == .handClosed {
                         tableActionButton("arrow.left.and.right", "Move", tint: Color.textMuted) { moveSeat() }
                             .padding(.trailing, 14)
                             .padding(.top, 10)
@@ -990,11 +992,11 @@ struct HandEntryView: View {
             let popped = savedHands.popLast()
             handCloseSummary = ""
             if lastHandWasSkipped {
-                // Skip undo: all hand state is still live (skipHand never called resetHandState).
-                // Just reverse the hand-number advance, clear the flag, and reopen recording.
-                // Do NOT fall through to the peel path — there is no erroneous action to remove.
+                // Skip undo: all hand state is still live (skipHand never called resetHandState) and
+                // the number was never advanced (New Hand does that). Just clear the flag and reopen
+                // recording at the last action. Do NOT fall through to the peel path — there is no
+                // erroneous action to remove.
                 lastHandWasSkipped = false
-                handNumber -= 1
                 phase = .recordingHand
                 highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
                 return
@@ -2570,12 +2572,14 @@ struct HandEntryView: View {
         effReplaceOnInput = false
     }
 
-    private func saveCurrentHand(outcome: Outcome?) {
+    /// Builds a `Hand` from the current live state. Pure snapshot — appends/replaces are the caller's
+    /// job. Used both for the initial save at close and for the move-on re-snapshot.
+    private func buildHand(outcome: Outcome?) -> Hand {
         var streetsToSave = streets
         if !actionsThisStreet.isEmpty {
             streetsToSave.append(Street(name: currentStreet, boardCards: [], actions: actionsThisStreet))
         }
-        let hand = Hand(
+        return Hand(
             sessionId: session.id,
             handNumber: handNumber,
             title: nil,
@@ -2590,47 +2594,50 @@ struct HandEntryView: View {
             effectiveStack: effectiveStack.map(Double.init),   // hand metadata, in big blinds
             commentary: nil
         )
-        savedHands.append(hand)
+    }
+
+    private func saveCurrentHand(outcome: Outcome?) {
+        savedHands.append(buildHand(outcome: outcome))
     }
 
     /// Deals the next hand from the hand-closed state: place the dealer button on the tapped seat,
     /// reset per-hand state, highlight the first actor, and start recording. The hand that just
     /// finished was already saved at close, so nothing is persisted here.
     /// New Hand — a clean break from the finished hand. Advances the hand number, clears all hand
-    /// state, and returns to the "place the button" screen (the same fresh start as hand #1). A skip
-    /// already advanced the number, so guard against a double-increment in that case.
+    /// state, and returns to the "place the button" screen (the same fresh start as hand #1). Every
+    /// close (showdown, fold-out, skip) leaves the number un-advanced, so New Hand always increments.
     private func startNewHand() {
         withAnimation(.easeInOut(duration: 0.2)) {
-            if !lastHandWasSkipped { handNumber += 1 }
+            handNumber += 1
             resetHandState()           // also clears lastHandWasSkipped
             phase = .placingButton
         }
     }
 
-    /// Saves the current hand as incomplete (outcome: nil) and moves to handClosed without clearing
-    /// hand state — so Undo can fully restore recording. startNewHand / moveSeat will reset when the
-    /// user actually moves on. Hand number increments; the skip flag lets undoLastAction skip the peel.
+    /// Skip = freeze the current hand exactly like a showdown/fold-out close, but with no outcome —
+    /// a "set this aside and move on" close. Stays on the SAME hand number (New Hand advances it,
+    /// like any close); saves the hand as incomplete; keeps all live state so Undo can reopen
+    /// recording at the last action. `lastHandWasSkipped` marks the close-kind for undoLastAction
+    /// (a skip reopens without peeling, distinguishing it from a fold-out which also saves nil).
     private func skipHand() {
         withAnimation(.easeInOut(duration: 0.2)) {
+            handCloseSummary = "SKIPPED"
             saveCurrentHand(outcome: nil)
-            handNumber += 1
             lastHandWasSkipped = true
             highlightedSeat = nil
             phase = .handClosed
         }
     }
 
-    /// Saves any in-progress hand as incomplete, increments the hand number, releases the hero seat,
-    /// and returns to seat selection. From handClosed (hand already saved) only increments and resets.
-    /// From placingButton (nothing started) just resets — no save, no increment.
+    /// Move = "next hand, new seat." Releases the hero seat and returns to seat selection ("TAKE
+    /// YOUR SEAT" → "PLACE THE BUTTON"). Only reachable from two phases (the button is hidden
+    /// elsewhere): from `handClosed` it deals the next hand, so the number advances (the finished
+    /// hand was already saved at close); from `placingButton` it just re-picks the seat for the
+    /// same, not-yet-started hand, so the number is unchanged. To change seats mid-hand, end the
+    /// hand with Skip first, then Move from the frozen state.
     private func moveSeat() {
         withAnimation(.easeInOut(duration: 0.2)) {
-            if phase == .recordingHand || phase == .showdown {
-                saveCurrentHand(outcome: nil)
-                handNumber += 1
-            } else if phase == .handClosed {
-                handNumber += 1
-            }
+            if phase == .handClosed { handNumber += 1 }
             heroSeat = nil
             resetHandState()
             phase = .selectSeat
