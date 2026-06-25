@@ -89,9 +89,11 @@ flush on the river). A plain single suit (`4s`) is unchanged.
 ---
 
 ## 3. Positions
-Frozen on each `Action` at record time (via `calculatePositions`), always using the **full table ring**
-so labels are stable throughout the hand even as players fold:
-`UTG, UTG+1, UTG+2, UTG+3, MP, MP+1, MP+2, HJ, CO, BTN, SB, BB`.
+Frozen on each `Action` at record time (via `calculatePositions`), computed over the **occupied
+seats** (all seats minus empties) so labels are stable throughout the hand even as players fold, and
+short-handed when seats are unoccupied. The 10-handed ring, in action order:
+`UTG, UTG+1, MP, MP+1, LJ, HJ, CO, BTN, SB, BB` (drop the middle/early fillers as the count shrinks —
+see `PokerActionReference.md` "Positions by Table Size").
 
 ---
 
@@ -271,7 +273,7 @@ Js7s2h. Hero 33%. CO call.
   (independent of the rest).
 - **B. Hero label:** `Hero` always, in all action lines. No "Hero - CO" inline declaration.
 - **C. Villain label:** position throughout (`BTN`, `HJ`, etc.). Position is stable for the full
-  hand — frozen using the full table ring at record time, not recalculated as players fold.
+  hand — frozen over the occupied-seat ring at record time, not recalculated as players fold.
 - **D. Verb elision:** sized wager → bare size for **everyone**, bet **and** raise; unsized wager
   keeps the verb; `chk`/`call`/`limp`/`fold` always keep their word.
 - **E. Re-raise notation:** `3b` / `4b` / `5b` for preflop re-raises. No `2b` — an open is always
@@ -298,9 +300,11 @@ Js7s2h. Hero 33%. CO call.
   insert cards once `groupNotation(.hole)` is non-empty, then append ` - [N]bb eff` once
   `effectiveStack` is non-nil (this last segment is independent — it appends regardless of whether
   the button/cards are set).
-- **Position stability.** `positionFor(seat:)` always calls `calculatePositions` with
-  `Array(0..<tableSize)` — never `activeSeatSequence`. This prevents the folded-BTN bug where
-  `calculatePositions` returns `[:]` and every post-flop position resolves to `"?"`.
+- **Position stability.** `positionFor(seat:)` calls `calculatePositions` with the **occupied**
+  seats (`occupiedSeats` = all seats minus empties) — never `activeSeatSequence`. Occupancy doesn't
+  change when a player folds, so this stays stable across folds (preventing the folded-BTN bug where
+  `calculatePositions` returns `[:]` and every post-flop position resolves to `"?"`) while still
+  excluding unoccupied seats.
 - **Preflop fold filter.** Before building pairs for the preflop street, skip any action where
   `actionType == .fold` AND that seat has exactly one action on the preflop street.
 - **Verb dispatch** keys on `actionType` + street (preflop vs post-flop) + running `aggCount` for

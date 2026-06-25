@@ -24,6 +24,14 @@ struct HandEntryView: View {
     @State private var heroSeat: Int? = nil
     @State private var tableSize: Int
 
+    /// Seats with no player (busted, not yet filled). Table composition, NOT per-hand action: it
+    /// persists across hands (NOT cleared by resetHandState) until edited again, and a hand simply
+    /// plays as if those seats don't exist (excluded from positions, the ring, and street close).
+    /// Edited only at `placingButton` via the Edit-Seats toggle. Hero's seat can never be empty.
+    @State private var emptySeats: Set<Int> = []
+    /// True while the place-button screen is in "tap a seat to toggle empty" mode (vs. place button).
+    @State private var seatEditMode: Bool = false
+
     // Hand state
     @State private var handNumber: Int = 1
     @State private var buttonSeat: Int? = nil
@@ -101,6 +109,13 @@ struct HandEntryView: View {
 
     private var openBetExists: Bool { betLevelThisStreet > 0 }
 
+    /// The seats that actually have a player this hand (all seats minus the empty ones), ascending.
+    /// Drives position labels and the active-seat sequence so an N-seat table with K empties plays
+    /// exactly like an (N−K)-handed game. Stable across folds (folding doesn't change occupancy).
+    private var occupiedSeats: [Int] {
+        Array(0..<tableSize).filter { !emptySeats.contains($0) }
+    }
+
     /// The phases that use the play layout — a fixed-size table over the bottom assembly (strip ·
     /// action/picker zone · transcript). Button placement is included so it matches recording (no big
     /// standalone table / void); only seat-select keeps the standalone table + size picker.
@@ -135,7 +150,7 @@ struct HandEntryView: View {
     private var tableInstruction: String? {
         switch phase {
         case .selectSeat:    return "TAKE\nYOUR SEAT"
-        case .placingButton: return "PLACE\nTHE BUTTON"
+        case .placingButton: return seatEditMode ? "TAP SEATS\nTO EMPTY" : "PLACE\nTHE BUTTON"
         // handClosed shows only the outcome (feltActionText) over the frozen table — the
         // "place the button" instruction now belongs to the post–New-Hand placingButton screen.
         default:             return nil
@@ -146,7 +161,7 @@ struct HandEntryView: View {
         guard let btn = buttonSeat else { return [:] }
         return calculatePositions(
             buttonSeatIndex: btn,
-            activeSeatIndices: Array(0..<tableSize)
+            activeSeatIndices: occupiedSeats
         )
     }
 
@@ -269,6 +284,7 @@ struct HandEntryView: View {
                     // drops the ring — no one can act while the board is dealt out.
                     activeSeat: (streetClosedDecisively || isRunOut) ? nil : highlightedSeat,
                     positions: seatPositions,
+                    emptySeats: emptySeats,
                     onSeatTap: handleSeatTap,
                     onSeatSwipe: handleSeatSwipe,
                     instruction: tableInstruction,
@@ -291,16 +307,33 @@ struct HandEntryView: View {
                     }
                 }
                 .overlay(alignment: .topLeading) {
+                    // Upper-left corner: Skip (end this hand) while recording; Edit-Seats / Done at
+                    // place-button (mark empty seats before the hand starts).
                     if phase == .recordingHand || phase == .showdown {
                         tableActionButton("arrow.forward", "Skip", tint: Color.foldRed) { skipHand() }
                             .padding(.leading, 14)
                             .padding(.top, 10)
+                    } else if phase == .placingButton {
+                        if seatEditMode {
+                            tableActionButton("checkmark", "Done", tint: Color.gold) {
+                                withAnimation(.easeInOut(duration: 0.2)) { seatEditMode = false }
+                            }
+                            .padding(.leading, 14)
+                            .padding(.top, 10)
+                        } else {
+                            tableActionButton("person.crop.circle.badge.minus", "Edit Seats", tint: Color.textMuted) {
+                                withAnimation(.easeInOut(duration: 0.2)) { seatEditMode = true }
+                            }
+                            .padding(.leading, 14)
+                            .padding(.top, 10)
+                        }
                     }
                 }
                 .overlay(alignment: .topTrailing) {
                     // Move is "next hand, new seat" — only at the ended state (handClosed) and the
-                    // pre-hand seat-fix state (placingButton). Mid-hand you end via Skip first.
-                    if phase == .placingButton || phase == .handClosed {
+                    // pre-hand seat-fix state (placingButton, but not while editing seats). Mid-hand
+                    // you end via Skip first.
+                    if phase == .handClosed || (phase == .placingButton && !seatEditMode) {
                         tableActionButton("arrow.left.and.right", "Move", tint: Color.textMuted) { moveSeat() }
                             .padding(.trailing, 14)
                             .padding(.top, 10)
@@ -319,7 +352,7 @@ struct HandEntryView: View {
                             .foregroundStyle(Color.textMuted)
                         Spacer()
                         ForEach([6, 8, 9, 10], id: \.self) { size in
-                            Button(action: { tableSize = size }) {
+                            Button(action: { tableSize = size; emptySeats = [] }) {
                                 Text("\(size)")
                                     .font(.custom("Arial", size: 11))
                                     .fontWeight(.bold)
@@ -429,11 +462,19 @@ struct HandEntryView: View {
         switch phase {
         case .selectSeat:
             heroSeat = seat
+            emptySeats.remove(seat)        // you can't take an empty seat — sitting there fills it
             phase = .placingButton
 
         case .placingButton:
+            // In Edit-Seats mode a tap toggles the seat empty/occupied; otherwise it places the
+            // button (never on an empty seat) and starts the hand over the occupied seats only.
+            if seatEditMode {
+                toggleEmptySeat(seat)
+                return
+            }
+            guard !emptySeats.contains(seat) else { return }
             buttonSeat = seat
-            activeSeatSequence = Array(0..<tableSize)
+            activeSeatSequence = occupiedSeats
             highlightedSeat = firstActor(of: .preflop)
             phase = .recordingHand
 
@@ -453,6 +494,20 @@ struct HandEntryView: View {
             // The table is frozen on the finished hand — tapping a seat does nothing. The explicit
             // New Hand button (in the Control Bar) is the only way forward.
             break
+        }
+    }
+
+    /// Toggle a seat empty/occupied in Edit-Seats mode. The hero's seat can never be emptied, and we
+    /// keep at least two occupied seats (a hand needs heads-up minimum). Restoring an empty seat is
+    /// the same tap. `emptySeats` is table composition and persists across hands.
+    private func toggleEmptySeat(_ seat: Int) {
+        guard seat != heroSeat else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            if emptySeats.contains(seat) {
+                emptySeats.remove(seat)
+            } else if occupiedSeats.count > 2 {
+                emptySeats.insert(seat)
+            }
         }
     }
 
@@ -1084,7 +1139,7 @@ struct HandEntryView: View {
         streetClosedDecisively = false
         let allActions = streets.flatMap { $0.actions } + actionsThisStreet
         foldedSeats = Set(allActions.filter { $0.actionType == .fold }.map { $0.seatIndex })
-        activeSeatSequence = Array(0..<tableSize).filter { !foldedSeats.contains($0) }.sorted()
+        activeSeatSequence = occupiedSeats.filter { !foldedSeats.contains($0) }.sorted()
         betLevelThisStreet = actionsThisStreet.filter {
             $0.actionType == .open || $0.actionType == .raise
         }.count
@@ -1212,12 +1267,13 @@ struct HandEntryView: View {
         }
     }
 
-    // Returns the BB's seat index based on the full table layout (position-stable across folds).
+    // Returns the BB's seat index over the occupied seats (position-stable across folds, and empty
+    // seats are excluded so BB lands on a real player).
     private func bbSeat() -> Int? {
         guard let btn = buttonSeat else { return nil }
         let positions = calculatePositions(
             buttonSeatIndex: btn,
-            activeSeatIndices: Array(0..<tableSize)
+            activeSeatIndices: occupiedSeats
         )
         return positions.first(where: { $0.value == "BB" })?.key
     }
@@ -1340,12 +1396,13 @@ struct HandEntryView: View {
 
     private func positionFor(seat: Int) -> String {
         guard let btn = buttonSeat else { return "?" }
-        // Use the full table ring so positions are stable even after players fold.
-        // Using activeSeatSequence here would exclude a folded BTN, causing calculatePositions
-        // to return [:] and every post-flop position to render as "?".
+        // Use the occupied-seat ring so positions are stable across folds (occupancy doesn't change
+        // when a player folds) while excluding empty seats. Using activeSeatSequence here would
+        // exclude a folded BTN, causing calculatePositions to return [:] and every post-flop
+        // position to render as "?".
         return calculatePositions(
             buttonSeatIndex: btn,
-            activeSeatIndices: Array(0..<tableSize)
+            activeSeatIndices: occupiedSeats
         )[seat] ?? "?"
     }
 
@@ -2418,7 +2475,7 @@ struct HandEntryView: View {
         var header = "Hand #\(handNumber)"
         if let btn = buttonSeat, hero >= 0 {
             let pos = calculatePositions(buttonSeatIndex: btn,
-                                         activeSeatIndices: Array(0..<tableSize))[hero] ?? ""
+                                         activeSeatIndices: occupiedSeats)[hero] ?? ""
             let cards = groupNotation(.hole)
             if !pos.isEmpty {
                 header += cards.isEmpty ? " - \(pos)" : " - \(cards) - \(pos)"
@@ -2565,6 +2622,7 @@ struct HandEntryView: View {
         highlightedSeat = nil
         handCloseSummary = ""
         streetClosedDecisively = false
+        seatEditMode = false       // emptySeats itself persists — it's table composition, not per-hand
         lastHandWasSkipped = false
         effectiveStack = nil       // blank every hand (no carry-forward)
         effEntryVisible = false

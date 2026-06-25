@@ -202,10 +202,10 @@ private func positionLabels(for count: Int) -> [String] {
     case 4:  return ["BTN", "SB", "BB", "UTG"]
     case 5:  return ["BTN", "SB", "BB", "UTG", "CO"]
     case 6:  return ["BTN", "SB", "BB", "UTG", "HJ", "CO"]
-    case 7:  return ["BTN", "SB", "BB", "UTG", "MP", "HJ", "CO"]
-    case 8:  return ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "HJ", "CO"]
-    case 9:  return ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "MP+1", "HJ", "CO"]
-    case 10: return ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "MP+1", "MP+2", "HJ", "CO"]
+    case 7:  return ["BTN", "SB", "BB", "UTG", "LJ", "HJ", "CO"]
+    case 8:  return ["BTN", "SB", "BB", "UTG", "UTG+1", "LJ", "HJ", "CO"]
+    case 9:  return ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "LJ", "HJ", "CO"]
+    case 10: return ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "MP+1", "LJ", "HJ", "CO"]
     default: return (0..<count).map { "Seat \($0 + 1)" }
     }
 }

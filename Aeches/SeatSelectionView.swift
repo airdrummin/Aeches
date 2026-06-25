@@ -37,6 +37,7 @@ struct TableOvalView: View {
     let seatStates: [Int: SeatState]
     let activeSeat: Int?
     let positions: [Int: String]
+    var emptySeats: Set<Int> = []   // seats with no player — rendered as a dashed empty ring
     let onSeatTap: (Int) -> Void
     var onSeatSwipe: (Int, SwipeDirection) -> Void = { _, _ in }
     var instruction: String? = nil
@@ -230,7 +231,8 @@ struct TableOvalView: View {
                         isHero: heroSeat == i,
                         state: seatStates[i],
                         isActive: activeSeat == i,
-                        position: positions[i]
+                        position: positions[i],
+                        isEmpty: emptySeats.contains(i)
                     )
                     .position(x: pos.x, y: pos.y)
                     // ONE gesture per seat classifies tap vs. swipe. A single
@@ -335,6 +337,7 @@ struct SeatButtonView: View {
     let state: SeatState?
     let isActive: Bool
     var position: String? = nil
+    var isEmpty: Bool = false        // no player here — a dashed empty ring, no label or action
 
     private let size: CGFloat = 50
 
@@ -553,9 +556,28 @@ struct SeatButtonView: View {
     }
 
     var body: some View {
-        Pulse(isActive: isActive) { phase in
-            seatBody.scaleEffect(1.0 + 0.04 * phase)
+        if isEmpty {
+            emptyBody
+        } else {
+            Pulse(isActive: isActive) { phase in
+                seatBody.scaleEffect(1.0 + 0.04 * phase)
+            }
         }
+    }
+
+    /// An unoccupied seat: a dashed grey ring with nothing inside, dimmed back. Still tappable (the
+    /// gesture lives on the parent) so it can be filled back in during Edit-Seats mode.
+    private var emptyBody: some View {
+        Circle()
+            .fill(Color(hex: "#0E0E0E"))
+            .frame(width: size, height: size)
+            .overlay(
+                Circle().stroke(
+                    Color(hex: "#3A3A3A"),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [4, 4])
+                )
+            )
+            .opacity(0.55)
     }
 
     private var seatBody: some View {

@@ -94,7 +94,7 @@ Both halves operate independently. The user can fill in cards before recording a
 
 2. **Select seat** — tap any seat to lock in as hero (HERO). A table size picker (6 / 8 / 9 / 10) lets you correct the seat count. Seat stays locked for the entire session.
 
-3. **Place dealer button** — tap any seat to set the dealer for this hand. The first highlight (UTG, or BB in short-handed games) appears automatically. Phase transitions to Recording.
+3. **Place dealer button** — tap any seat to set the dealer for this hand. The first highlight (UTG, or BB in short-handed games) appears automatically. Phase transitions to Recording. Before placing the button you can mark **empty seats** (see **Empty Seats** below) via the **Edit Seats** corner toggle — the button can't be placed on an empty seat.
 
 4. **Recording** — both halves are active simultaneously. All recording controls live in a **Control Bar** pinned to the bottom (thumb zone), laid out in **two rows**: a slim **utility row** — **Undo** (left) · **Next Street / End Hand** (right) — above a **full-width primary row** of **action buttons**. When the hand closes the bar goes quiet (Undo only). Several input paths coexist:
    - **Action buttons** (the full-width primary row): act on the highlighted seat, then advance the ring to the next player. Context-aware:
@@ -175,6 +175,16 @@ Card entry is **per-street group entry**, not slot-by-slot. Tapping any slot ope
 - The 7–2 rank row is centered to nest into the gaps of the A–8 row above.
 - Accepted notation: hole `AK`, `AKo`, `AKs`, `AhKs`, `AsKx`, footnote `AJdx`; flop `Q53r` / `Q53m` / `Q53tt` / `Qh5h3x` / footnote `Q53hhx`.
 - The trash icon clears the group; the slim grab handle (tap / swipe down) dismisses; **Next** (`›`) advances to the next bank (`✓` on the river).
+
+### Empty Seats
+
+Real tables aren't always full — a seat busts out, or hasn't been filled yet. **Empty seats** mark which seats have no player this hand, so the hand plays (and labels positions) as a shorter-handed game: a 9-seat table with 2 empties acts exactly like 7-handed.
+
+- **When:** edited at **place-button** only (the start of a hand). A muted **Edit Seats** corner button (upper-left, where Skip sits during recording) flips the table into edit mode: the felt reads **"TAP SEATS TO EMPTY,"** the corner button turns gold **Done**, and tapping any seat toggles it **empty ↔ occupied**. Tap **Done** to return to placing the button.
+- **Render:** an empty seat is a **dashed grey ring with nothing inside** — no position label, no action, dimmed. It can't be acted on during recording, and the dealer button can't be placed on it.
+- **Rules:** the **hero's seat can never be emptied**, and at least **2 seats stay occupied** (heads-up minimum). Taking a seat at seat-select fills it.
+- **Persistence:** empty seats are **table composition, not per-hand action** — the set **carries across hands** (untouched by New Hand / Skip / Undo) until you edit it again, so you mark a busted seat once. Changing the table size (seat-select) clears it.
+- **Positions adjust automatically.** Labels are computed over the **occupied** seats, so empties are skipped and the ring renumbers (e.g. seat 1 empty → that seat has no label; the next occupied seat becomes UTG). See `PokerActionReference.md` "Positions by Table Size."
 
 ### Incognito Mode
 
@@ -301,6 +311,8 @@ Hand #1 - QJdd - MP - 50bb eff
 - Full hand recording engine — `HandEntryView.swift`
 - Geometric table oval with gold rail, felt, gap at dealer station, 6/8/9/10-seat support
 - Session-locked hero seat, per-hand dealer button placement
+- Empty seats — an **Edit Seats** toggle at place-button marks seats with no player (dashed empty rings); the hand plays and labels positions as a shorter-handed game (occupied seats only). Persists across hands as table composition; hero's seat protected, ≥2 seats kept (see Empty Seats)
+- Position labels anchored both ends — UTG always first-to-act, LJ/HJ/CO button-relative, MP/MP+1 the middle filler (6→10-handed); computed over occupied seats so empties renumber the ring
 - Phase system: selectSeat → placingButton → recordingHand → showdown → handClosed
 - Two-row Control Bar (bottom, thumb zone): a slim utility row (Undo · Next Street) above a full-width primary action row — Fold/Call/Raise (bet context) or Check/Bet (no bet)
 - Unified committed-input model — action buttons and swipes share one settle path (`settleAfterCommit`): record the action, then advance the ring to the next player with no seeded action; a closing action holds and lights Next Street
@@ -384,7 +396,7 @@ Hand #1 - QJdd - MP - 50bb eff
 |---|---|
 | `Aeches/HandEntryView.swift` | Full hand recording engine, two-row Control Bar (Undo · actions · Next Street), per-street card picker, shorthand transcript, all phase logic |
 | `Aeches/SeatSelectionView.swift` | Shared components only: `TableOvalView`, `SeatButtonView`, `SeatState`, `seatPosition()` |
-| `Aeches/Models.swift` | All data models and enums. `calculatePositions()` for position labels. Do not modify. |
+| `Aeches/Models.swift` | All data models and enums. `calculatePositions()` + `positionLabels(for:)` are the single source of truth for position labels (the only thing here intended to change — and only the label convention). Otherwise treat as stable. |
 | `Aeches/ContentView.swift` | Tab bar, `RecordTab`, design tokens (`Color` extensions) |
 | `Aeches/NewSessionView.swift` | Session creation screen |
 | `Aeches/LoginView.swift` | Auth screen |
@@ -525,6 +537,6 @@ Position labels (BTN, SB, BB, UTG, etc.) are calculated at hand record time from
 - `buttonSeatIndex` on the hand
 - `activeSeatIndices` on the hand
 
-Labels are assigned based on the **active seat count only** — empty seats are skipped entirely and do not consume a position slot. A 6-handed active game gets exactly 6 labels (BTN, SB, BB, UTG, HJ, CO). A 9-handed game gets the full set. Labels are stored frozen on each `Action` at the moment of recording.
+Labels are assigned based on the **occupied seat count only** — empty/unoccupied seats are skipped entirely and do not consume a position slot. A 6-occupied game gets exactly 6 labels (UTG, HJ, CO, BTN, SB, BB); a 9-occupied game gets `UTG, UTG+1, MP, LJ, HJ, CO, BTN, SB, BB`. The convention anchors UTG (first-to-act) and the button-relative late seats (LJ/HJ/CO + blinds/button), with MP/MP+1 the middle filler — see `PokerActionReference.md` "Positions by Table Size" for the full ladder. Labels are stored frozen on each `Action` at the moment of recording.
 
-`calculatePositions(buttonSeatIndex:activeSeatIndices:)` is a free function in `Models.swift` and is the single source of truth for all position label logic.
+`calculatePositions(buttonSeatIndex:activeSeatIndices:)` (with `positionLabels(for:)`) is a free function in `Models.swift` and is the single source of truth for all position label logic. The hand-entry UI passes it the **occupied** seats (all seats minus the empty set).

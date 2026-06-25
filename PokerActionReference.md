@@ -7,23 +7,30 @@ All street-close detection, highlight sequencing, and phase transitions must fol
 
 ## Positions by Table Size
 
-Positions are assigned clockwise from the button. Active seats only — empty seats are skipped.
+Positions are assigned clockwise from the button, labeled by **occupied seat count** — empty/
+unoccupied seats are excluded entirely, so a 9-seat table with 2 empties is labeled exactly like a
+7-handed game. The convention anchors **both ends** — `UTG` is always first-to-act, and the late
+seats (`LJ`, `HJ`, `CO`) plus the blinds/button are button-relative — and `MP`/`MP+1` are the
+middle filler that only appears when there's room (9+). The single source of truth is
+`positionLabels(for:)` in `Models.swift`.
 
 | Position | Role |
 |----------|------|
 | BTN | Dealer button. Last to act post-flop. |
 | SB | Posts small blind (forced). Acts second-to-last preflop, first post-flop if active. |
 | BB | Posts big blind (forced). Acts **last** preflop. Acts second post-flop if SB folded. |
-| UTG | First to act preflop. |
+| UTG | First to act preflop (present 4-handed and up). |
 | UTG+1 | Second to act preflop (8+ handed). |
-| UTG+2 | Third to act preflop (9+ handed). |
+| MP | Middle position — the middle filler (9+ handed). MP+1 adds at 10. |
+| LJ | Lojack — three seats right of BTN, immediately right of HJ (7+ handed). |
 | HJ | Hijack — two seats right of BTN. |
 | CO | Cutoff — one seat right of BTN. Acts just before BTN. |
 
 **6-max:** UTG, HJ, CO, BTN, SB, BB
-**8-max:** UTG, UTG+1, HJ, CO, BTN, SB, BB (7 positions, 8th seat is unnamed between CO and BTN)
-**9-max:** UTG, UTG+1, UTG+2, HJ, CO, BTN, SB, BB
-**10-max:** UTG, UTG+1, UTG+2, UTG+3, HJ, CO, BTN, SB, BB
+**7-max:** UTG, LJ, HJ, CO, BTN, SB, BB
+**8-max:** UTG, UTG+1, LJ, HJ, CO, BTN, SB, BB
+**9-max:** UTG, UTG+1, MP, LJ, HJ, CO, BTN, SB, BB
+**10-max:** UTG, UTG+1, MP, MP+1, LJ, HJ, CO, BTN, SB, BB
 
 ---
 
@@ -41,8 +48,9 @@ SB and BB post forced bets before any action begins. **Posting a blind is not an
 **Clockwise starting from UTG, ending at BB.**
 
 ```
-UTG → UTG+1 → UTG+2 → HJ → CO → BTN → SB → BB
+UTG → UTG+1 → MP → LJ → HJ → CO → BTN → SB → BB
 ```
+(9-handed; shorter-handed drops the middle/early fillers — see "Positions by Table Size".)
 
 BB is always **last to act preflop**, regardless of table size.
 
