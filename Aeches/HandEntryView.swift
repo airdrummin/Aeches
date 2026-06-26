@@ -78,9 +78,15 @@ struct HandEntryView: View {
     // otherwise — so "peek" is just re-selecting your cards. Board cards are public, never hidden.
     @State private var incognito = false
 
-    // The bottom transcript: a 1-line sliver pinned at the bottom that expands up into the full hand.
+    // The bottom transcript: a tail pinned at the bottom that expands up into the full hand. It is one
+    // height-animated panel (collapsed ↔ full section), so expand and collapse are the same animation
+    // run forward and backward. The collapsed height is the measured freed space under the control bar
+    // (which shrinks when the action row is absent — place-button / hand-closed — so the tail grows to
+    // fill it); the expanded height is the measured section. Both carry fallbacks for the first frame.
     @State private var transcriptExpanded: Bool = false
     @State private var transcriptCopied: Bool = false
+    @State private var bottomSectionHeight: CGFloat = 320      // full card-strip + control region (measured)
+    @State private var collapsedTranscriptHeight: CGFloat = 110 // freed space under the control bar (measured)
 
     // Hand-close state
     @State private var handCloseSummary: String = ""
@@ -380,8 +386,15 @@ struct HandEntryView: View {
                 // the control bar + transcript while a card group is open (they never co-exist).
                 // See DisplayLayoutPlan.md §"Layout model".
                 if isPlayingPhase {
-                    // ── Bottom assembly: card strip + control region, with the transcript drawer
-                    // overlaid on this section only — it never covers the table above the divider.
+                    // ── Bottom assembly: card strip + fixed-height control region, with the transcript
+                    // as a single height-animated overlay over this section only (never the table above
+                    // the divider). Collapsed, the panel rests in the tail slot under the control bar;
+                    // expanded, its height grows to cover the whole section — the same animation run
+                    // forward and backward, so expand and collapse are symmetric. `.clipped()` keeps it
+                    // from ever drawing past the section (e.g. beneath the tab bar). The control bar's
+                    // height varies (two rows recording, one closed), so both the section height and the
+                    // collapsed-slot height are measured rather than hardcoded. See DisplayLayoutPlan.md
+                    // §"Layout model" and §#4.
                     ZStack(alignment: .bottom) {
                         VStack(spacing: 0) {
                             cardStrip
@@ -419,30 +432,47 @@ struct HandEntryView: View {
                                             onSizingChip: handleSizingChip,
                                             onNewHand: startNewHand
                                         )
-                                        // Fills the region beneath the control bar — 3–5 lines, scrolls to the
-                                        // newest action; the full hand is the expand drawer.
-                                        transcriptInline
+                                        // Greedy filler: takes all space below the control bar (it grows
+                                        // when the action row is absent — place-button / hand-closed),
+                                        // reports that height so the transcript overlay matches it
+                                        // exactly, and is surface-colored so any 1-frame measurement
+                                        // mismatch shows surface, never the black background.
+                                        Color.surface
+                                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                            .background(GeometryReader { g in
+                                                Color.clear.preference(key: TranscriptSlotHeightKey.self,
+                                                                       value: g.size.height)
+                                            })
                                     }
                                 }
                             }
                             .frame(height: controlRegionHeight)
                         }
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: BottomSectionHeightKey.self, value: g.size.height)
+                        })
 
-                        // Drawer slides up to cover only this bottom section (cards + control region).
-                        // The table above the divider stays fully visible and interactive.
-                        if transcriptExpanded {
-                            transcriptDrawer
-                                .transition(.move(edge: .bottom))
+                        // Single transcript panel — one view, height-animated between the collapsed slot
+                        // and the full section, so expand/collapse are symmetric. Hidden while the card
+                        // picker owns the region (the two never co-exist).
+                        if entryStreet == nil {
+                            transcriptPanel(expanded: transcriptExpanded)
+                                .frame(height: transcriptExpanded ? bottomSectionHeight : collapsedTranscriptHeight)
+                                .clipped()
+                                .transition(.opacity)
                         }
 
-                        // Eff-stack keypad — like the drawer, slides up over the bottom section only
-                        // (cards + control region), so it has room for full-size keys and the table
-                        // above never shifts. Tapping the table / strip behind it still works.
+                        // Eff-stack keypad — slides up over the bottom section only (cards + control
+                        // region), so it has room for full-size keys and the table above never shifts.
+                        // Tapping the table / strip behind it still works.
                         if effEntryVisible {
                             effStackPanel
                                 .transition(.move(edge: .bottom))
                         }
                     }
+                    .clipped()
+                    .onPreferenceChange(BottomSectionHeightKey.self) { if $0 > 0 { bottomSectionHeight = $0 } }
+                    .onPreferenceChange(TranscriptSlotHeightKey.self) { if $0 > 0 { collapsedTranscriptHeight = $0 } }
                 } else {
                     Spacer(minLength: 0)
                 }
@@ -451,7 +481,6 @@ struct HandEntryView: View {
         .animation(.easeInOut(duration: 0.2), value: entryStreet != nil)
         .animation(.easeInOut(duration: 0.2), value: effEntryVisible)
         .animation(.easeInOut(duration: 0.2), value: phase)
-        .animation(.easeInOut(duration: 0.25), value: transcriptExpanded)
     }
 
     // MARK: - Seat Tap Handler
@@ -1757,13 +1786,16 @@ struct HandEntryView: View {
         }
     }
 
-    /// The dismiss affordance: a slim grabber bar at the top of the picker. Tap or swipe down to
-    /// close (reveals the transcript) — the "no more cards / stop here" action, on any bank.
+    /// The dismiss affordance: a gold down-chevron at the top of the picker — the same idiom the
+    /// transcript header uses, so "tap the chevron to collapse this dock" reads the same everywhere.
+    /// Tap or swipe down to close (reveals the transcript) — the "no more cards / stop here" action,
+    /// on any bank. The bare glyph is small; a reserved 44pt tap target keeps it thumb-friendly, and
+    /// it won't read as the gold Next *tile* (that one is filled).
     private var grabHandle: some View {
-        Capsule()
-            .fill(Color.borderDark)
-            .frame(width: 40, height: 5)
-            .padding(.vertical, 5)
+        Image(systemName: "chevron.down")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(Color.gold)
+            .frame(width: 44, height: 24)
             .contentShape(Rectangle())
             .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { closeEntry() } }
             .gesture(
@@ -1871,14 +1903,22 @@ struct HandEntryView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Bottom Transcript (inline tail + expand-up drawer)
+    // MARK: - Bottom Transcript (one height-animated panel: tail ↔ full hand)
 
-    /// The inline transcript inside the dock's control region, beneath the control bar: a header (tap the
-    /// chevron to expand the full hand up; Copy) over a scrollable tail of the running shorthand. It fills
-    /// the region's remaining space below the control bar (~3–5 lines), auto-scrolling to the newest
-    /// action; the full hand is the expand drawer. It is hidden while the picker is open (the picker takes
-    /// the whole control region), so the two never co-exist. See DisplayLayoutPlan.md §#4.
-    private var transcriptInline: some View {
+    /// Toggle the transcript between its collapsed tail and the full-hand view. Driving the panel's
+    /// frame height inside one `withAnimation` is what makes expand and collapse the same animation
+    /// run forward and backward (it replaced a slide-in drawer whose collapse looked unseamless).
+    private func toggleTranscript() {
+        withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded.toggle() }
+    }
+
+    /// The transcript panel — one view used both collapsed and expanded. Mounted as a bottom-anchored
+    /// overlay in the bottom section, its height animates between the collapsed tail slot (under the
+    /// control bar) and the full section; the content is identical in both states (same header, font,
+    /// padding) so nothing reflows — only how many lines are visible changes. `expanded` flips only
+    /// cosmetics: the chevron direction. Hidden while the card picker owns the region. See
+    /// DisplayLayoutPlan.md §#4.
+    private func transcriptPanel(expanded: Bool) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text("HAND HISTORY")
@@ -1890,27 +1930,23 @@ struct HandEntryView: View {
                 Button(action: copyShorthand) {
                     HStack(spacing: 4) {
                         Image(systemName: transcriptCopied ? "checkmark" : "doc.on.doc").font(.system(size: 11))
-                        Text(transcriptCopied ? "Copied" : "")
-                            .font(.custom("Arial", size: 11))
-                            .opacity(transcriptCopied ? 1 : 0)
+                        Text(transcriptCopied ? "Copied" : "Copy").font(.custom("Arial", size: 11))
                     }
                     .foregroundStyle(transcriptCopied ? Color.winGreen : Color.gold)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .overlay(Capsule().stroke(transcriptCopied ? Color.winGreen.opacity(0.4) : Color.clear, lineWidth: 1))
-                    // Idle, the label collapses to just the ~11pt icon — far below a 44pt finger, so
-                    // taps miss and it feels like it needs a hold. Reserve a real tap target.
                     .frame(minWidth: 44, minHeight: 36)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(handShorthand.isEmpty)
                 .opacity(handShorthand.isEmpty ? 0.35 : 1.0)
-                Button(action: { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = true } }) {
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 10, weight: .bold))
+                Button(action: toggleTranscript) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.up")
+                        .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(Color.gold)
-                        .padding(.leading, 4)
+                        .frame(minWidth: 44, minHeight: 36)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1922,10 +1958,11 @@ struct HandEntryView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(handShorthand.isEmpty ? "No actions yet — record on the table or fill in cards." : handShorthand)
-                        .font(.custom("Courier New", size: 12))
+                        .font(.custom("Courier New", size: 13))
                         .foregroundStyle(handShorthand.isEmpty ? Color.textMuted : Color.textBody)
-                        .lineSpacing(3)
+                        .lineSpacing(3.5)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
                         .padding(.horizontal, 16)
                         .padding(.bottom, 8)
                     Color.clear.frame(height: 1).id("tailEnd")
@@ -1933,65 +1970,12 @@ struct HandEntryView: View {
                 .onChange(of: handShorthand) { _, _ in
                     withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("tailEnd", anchor: .bottom) }
                 }
+                .onChange(of: transcriptExpanded) { _, _ in
+                    proxy.scrollTo("tailEnd", anchor: .bottom)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color.surface)
-        .overlay(alignment: .top) {
-            Rectangle().fill(Color.borderDark.opacity(0.6)).frame(height: 1)
-        }
-    }
-
-    /// The expanded transcript drawer — the full multi-line hand in Courier, with Copy and a collapse
-    /// chevron. Presented as a bottom drawer from `body` (sized by the spacer above it there).
-    private var transcriptDrawer: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("HAND HISTORY")
-                    .font(.system(size: 11, weight: .bold))
-                    .tracking(2)
-                    .foregroundStyle(Color.gold)
-                Spacer()
-                Button(action: copyShorthand) {
-                    HStack(spacing: 4) {
-                        Image(systemName: transcriptCopied ? "checkmark" : "doc.on.doc").font(.system(size: 12))
-                        Text(transcriptCopied ? "Copied" : "Copy").font(.custom("Arial", size: 13))
-                    }
-                    .foregroundStyle(transcriptCopied ? Color.winGreen : Color.textBody)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .overlay(Capsule().stroke(transcriptCopied ? Color.winGreen.opacity(0.4) : Color.borderDark, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .contentShape(Rectangle())
-                Button(action: { withAnimation(.easeInOut(duration: 0.25)) { transcriptExpanded = false } }) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Color.gold)
-                        .padding(.leading, 12)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-
-            Rectangle().fill(Color.borderDark).frame(height: 1)
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(handShorthand)
-                        .font(.custom("Courier New", size: 14))
-                        .foregroundStyle(Color.textBody)
-                        .lineSpacing(4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .padding(18)
-                    Color.clear.frame(height: 1).id("drawerEnd")
-                }
-                .onAppear { proxy.scrollTo("drawerEnd", anchor: .bottom) }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.surface)
         .overlay(alignment: .top) {
             Rectangle().fill(Color.borderDark.opacity(0.6)).frame(height: 1)
@@ -2126,13 +2110,14 @@ struct HandEntryView: View {
         }
     }
 
-    /// Grab handle for the eff keypad — tap or swipe down to dismiss WITHOUT committing (matches the
-    /// card picker's handle). The value only changes via ✓.
+    /// Dismiss affordance for the eff keypad — a gold down-chevron, identical to the card picker's
+    /// handle so the two docks share one vocabulary. Tap or swipe down to dismiss WITHOUT committing;
+    /// the value only changes via ✓.
     private var effGrabHandle: some View {
-        Capsule()
-            .fill(Color.borderDark)
-            .frame(width: 40, height: 5)
-            .padding(.vertical, 5)
+        Image(systemName: "chevron.down")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(Color.gold)
+            .frame(width: 44, height: 24)
             .contentShape(Rectangle())
             .onTapGesture { closeEffEntry() }
             .gesture(
@@ -2741,6 +2726,20 @@ struct HandEntryView: View {
 /// The one home for all recording controls. Morphs by phase:
 /// - recording:  [ Rewind ]  [ Fold/Call/Raise · Check/Bet ]  [ Flop › ]
 /// - showdown / hand-closed:  [ Rewind ]  (the table overlay / "tap a seat to deal" drives the rest)
+/// Measures the bottom section's full height (card strip + control region) — the transcript panel's
+/// expanded height.
+private struct BottomSectionHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Measures the freed space under the control bar (the collapsed transcript's resting slot). It grows
+/// when the control bar's action row is absent (place-button / hand-closed), so the transcript fills it.
+private struct TranscriptSlotHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 private struct ControlBar: View {
     let isRecording: Bool
     let currentStreet: StreetName

@@ -69,13 +69,22 @@ appears — **no device-specific code**.
 - Total height **~125 pt**, pinned to the bottom of the dock.
 
 ### #4 — Transcript
-- Inline: **floor 3 lines, cap 5 lines** (header ≈ 25 pt + ~16 pt/line → 73–105 pt).
-- Reserved at its **5-line height (105 pt)** so it never moves the table; content flexes
+- Collapsed: **floor 3 lines, cap 5 lines** (header ≈ 25 pt + ~16 pt/line → 73–105 pt).
+- Reserved at its **5-line height (≈105 pt)** so it never moves the table; content flexes
   3–5 within that slot (short content = a little internal breathing room).
 - Leftover beyond the cap on big phones → **breathing room around the table** (margin in the
   flexible table frame), never a taller log and never a void.
-- **Hide the inline transcript while the picker is open** (today it stays as a sliver — change it).
-- Full read / Copy / push → the existing **expand drawer**, unchanged.
+- **Hidden while the picker is open** (the picker owns the whole region; the two never co-exist).
+- Full read / Copy → **expand in place**: it is **one height-animated panel**, not a separate
+  drawer. A bottom-anchored overlay whose height animates between the collapsed tail slot and the
+  full section, so expand and collapse are the same animation run forward and backward (the old
+  slide-in drawer collapsed unseamlessly — it slid off behind the tab bar and revealed a different,
+  smaller layout). The expanded height is the **measured section** (`BottomSectionHeightKey`); the
+  collapsed height is the **measured freed space under the control bar** (`TranscriptSlotHeightKey`),
+  reported by a greedy surface-colored filler in the base — so the tail grows when the action row is
+  absent (place-button / hand-closed) and there's never a gap. The section `.clipped()` keeps the
+  panel from drawing past its bounds. The chevron toggles it (`toggleTranscript`); collapsed shows
+  `chevron.up`, expanded `chevron.down`.
 
 ---
 
@@ -109,6 +118,9 @@ Top-packed `VStack`: `nav · status · TABLE FRAME (flexible) · divider · DOCK
   on picker toggle, button placement, and street changes.
 - Device slack flows only into the **table-frame margin** (and a tiny bottom gap on the very
   largest phones if the soft max is hit) — never a mid-screen void.
+- **Expanding the transcript doesn't break this:** the full-hand view is an *overlay* that grows
+  over the dock (its height animates from the `transcript slot 105` up to the full dock height),
+  so the base region stays a constant 230 and the table never moves (see §#4).
 
 **Picker interlock check:** control bar (125) + transcript slot (105) = 230 ≥ picker (174). ✅
 The picker always fits in the freed region with room to spare.
