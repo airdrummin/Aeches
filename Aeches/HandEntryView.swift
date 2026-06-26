@@ -2586,17 +2586,26 @@ struct HandEntryView: View {
             if a.sizing?.label == "All-in" { return "call (all-in)" }   // a call that committed the rest
             return (isPreflop && !priorAggression) ? "limp" : "call"
         case .open:
+            // The opening wager of a street (post-flop bet). When sized it elides to the bare size;
+            // the All-in marker becomes the verb `jam`.
             if let label = a.sizing?.label { return label == "All-in" ? "jam" : label }
-            return isPreflop ? "raise" : "bet"
+            return isPreflop ? "R" : "bet"
         case .raise:
-            if let label = a.sizing?.label { return label == "All-in" ? "jam" : label }
-            if isPreflop {
-                // The Raise action button always records .raise (even for an open). aggIndex == 1
-                // means this is the first aggressive action on the street → open raise → "raise".
-                // aggIndex 2+ is a genuine re-raise: first re-raise → "3b", next → "4b", etc.
-                return aggIndex <= 1 ? "raise" : "\(aggIndex + 1)b"
-            }
-            return "raise"
+            if a.sizing?.label == "All-in" { return "jam" }
+            // aggIndex 1 is the pre-flop open (recorded as a `.raise` by the Raise button). It's the
+            // opening wager, so it behaves like `.open` above — bare size when sized, plain "R"
+            // (shorthand for raise) when not. (Post-flop the open is an `.open`, so a `.raise` there
+            // is always aggIndex 2+.)
+            if aggIndex <= 1 { return a.sizing?.label ?? "R" }
+            // A genuine re-raise. Escalation ladder, unified across streets: `level` counts wagers
+            // including the implied pre-flop blind (the first bet in front), so a pre-flop open and a
+            // post-flop first raise are both level 2 → "R" (raise); level 3+ → "3b", "4b", "5b" …
+            // The label is always kept; a size, when entered, is appended (`3b 2.3x`, `R 3x`) so
+            // the escalation a bare size would hide stays visible.
+            let level = aggIndex + (isPreflop ? 1 : 0)
+            let verb = level <= 2 ? "R" : "\(level)b"
+            if let label = a.sizing?.label { return "\(verb) \(label)" }
+            return verb
         }
     }
 

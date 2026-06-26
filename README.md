@@ -195,7 +195,7 @@ When on:
 - **The hole caption is the single read-out** — readable while the hole bank is selected (tap your cards), blurred whenever it isn't. "Peek" is just re-selecting your cards; there is no separate peek control.
 - **The hole texture pill is omitted** (redundant with the caption text, and would leak the suits).
 
-*(Transcript masking — `Hero - UTG raise AJo` still shows the hand in plain text — is not yet implemented.)*
+*(Transcript masking — the header still shows the hole cards in plain text, e.g. `Hand #1 - AJo - UTG` — is not yet implemented.)*
 
 ### Hand Shorthand Transcript
 
@@ -203,7 +203,14 @@ A running **shorthand text** of the hand renders in the gap below the strip (the
 
 - It is a **pure render of the action log** (computed like the seat visuals), so it tracks Undo/edits automatically and is never out of sync.
 - Grammar (hero label, verb elision, check-around collapse, limp, bare board, showdown result) is defined in full in **`ShorthandReference.md`** — the authoritative source for both the card notation and the action shorthand.
-- Example: `Hero - UTG raise AJo. BTN call.` / `Q53r. Hero chk. BTN 30%. Hero 2.2x. BTN call.` / `Jh. chk chk.` / `5x. Hero 90%. BTN fold.`
+- Example — header then one line per street (hero's position + cards live in the header only):
+  ```
+  Hand #1 - AJo - UTG
+  Hero R. BTN call.
+  Q53r. Hero chk. BTN 30%. Hero 2.2x. BTN call.
+  Jh. Hero & BTN chk.
+  5x. Hero 90%. BTN fold.
+  ```
 
 ### Effective Stack
 
@@ -460,7 +467,7 @@ suit:  Suit?        // nil = unknown
 ```
 type:   SizingType
 value:  Double?     // nil for named presets like "Pot"
-label:  String      // display string e.g. "2x", "½ Pot", "14BB", "$120"
+label:  String      // display string e.g. "2x", "2.5x", "50%", "Pot", "All-in"
 ```
 
 `RaiseSizing` is attached to `.open`/`.raise` actions sized via the Raise/Bet button hold (see Hold-to-size), and to a `.call` marked `All-in` via the Call-button hold (the all-in marker — see All-in flow). It is `nil` on unsized actions (quick taps, swipes, and ordinary calls/checks/folds).
