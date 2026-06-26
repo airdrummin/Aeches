@@ -171,6 +171,11 @@ badge, the hold-Call→All-in input, and run-out mode).
 Triggered when the river action closes and **two or more players remain active**.
 Players reveal hole cards; best 5-card hand wins.
 
+The **Win / Lose / Chop overlay** is hero-centric, so it appears only when **hero is one of the
+remaining players**. If hero already folded, the hand still goes to showdown between the villains, but
+no overlay is shown — the hand closes directly (the still-in villains' cards remain recordable in the
+showdown card row). A fold-out (one player left) is not a showdown.
+
 ---
 
 ## Implications for the App

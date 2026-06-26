@@ -61,6 +61,10 @@ appears — **no device-specific code**.
 ### #2 — Card strip
 - **Unchanged:** fixed ~95 pt, cards 40×40, four groups side-by-side.
 - Keep the always-reserved caption row (stops the strip jumping when suit captions appear).
+- **At showdown/close** the strip becomes a horizontal `ScrollView`: the hero hole + board stay
+  spread across one screen width (no scroll, identical look), and the still-in **villains' hole
+  groups** are appended to the right and scroll into view. Horizontal-only — the strip's height and
+  the table above are unaffected. See README "Villain Cards."
 
 ### #3 — Control bar
 - **Action chips: 48 → 54 pt tall, text 14 → 16 pt.** The primary one-thumb control; bought

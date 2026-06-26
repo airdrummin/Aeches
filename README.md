@@ -119,7 +119,7 @@ Both halves operate independently. The user can fill in cards before recording a
 
 6. **Hand close** — two paths:
    - **Fold-out**: when all but one player folds at any point, the hand closes immediately. No user action required.
-   - **Showdown**: when the river closes with 2+ active players, a **Win / Lose / Chop** overlay appears centered on the table. Tap the outcome to close.
+   - **Showdown**: when the river closes with 2+ active players **and hero is still in**, a **Win / Lose / Chop** overlay appears centered on the table. Tap the outcome to close. If **hero already folded**, there's no hero result to pick — the hand closes directly with no overlay (felt reads `Showdown`); the still-in villains' cards are still enterable in the showdown row.
 
 7. **Summary state** — the hand stays on its number (e.g. "Hand #1"). The **table stays frozen on the finished hand** — seat actions, positions, dealer button, and the final street all remain on screen so the completed hand reads clearly (the last street with action stays visible — the river at a normal showdown, or the last contested street in an all-in run-out, where the betting ended before the board was dealt out). The outcome renders as felt text in the center:
    - "You win"
@@ -227,6 +227,17 @@ Hand #1 - QJdd - MP - 50bb eff
 - **Availability:** the chip is reachable in every playing phase the transcript header shows (recording, showdown, hand-closed) — addable or editable at any time, like the rest of the app.
 - Persisted to `Hand.effectiveStack` (stored as the BB count). See `ShorthandReference.md §4` for the header grammar.
 
+### Villain Cards (showdown)
+
+Capture the cards of villains who reach a showdown — recorded entirely in the **card area**, never on the table (so seat-taps stay free for action entry).
+
+- **When:** the moment the hand reaches a showdown — live at the **Win / Lose / Chop overlay** and after close. Also when **hero folded** and the hand still goes to a villain-vs-villain showdown (no overlay there, but the villains' cards are recordable). A plain fold-out / skip shows nothing (no one to reveal).
+- **Who:** the seats **still in the hand at the end** (hero excluded) — usually one villain, more in an all-in/multiway pot. Computed from `activeSeatSequence`, so eligibility is automatic.
+- **Where:** a villain's hole group is appended to the **right of RIVER** in the card strip, which becomes **horizontally scrollable** at showdown (the hero hole + board stay spread and anchored on the first screen; villains scroll into view, with a one-time peek-nudge to surface them). Empty slots carry the gold "enter now" cue.
+- **How:** tap a villain group → the **same hole-card picker** (ranks, suits, `s`/`o`, bound/footnote/relationship) — the group's two slots are the live frames, identical to entering your own hole cards. The label is the villain's position (`CO`, `BB`).
+- **Output:** persisted to `Hand.villainCards` (per-hand, keyed by seat), and the transcript appends `shows` lines before the result: `CO shows AQs. BB shows JJ. Hero wins.` (see `ShorthandReference.md` §9).
+- Cards entered after close re-sync onto the saved hand.
+
 ### Villain Profiles *(not yet implemented)*
 
 - Quick tags: OMC, LAG, TAG, Fish, Reg, Unknown
@@ -234,7 +245,6 @@ Hand #1 - QJdd - MP - 50bb eff
 - Running notes field — add reads throughout the session
 - Villain profiles persist across all hands within a session
 - Swipe left on a seat to bust/clear a player — hands already recorded retain original descriptor
-- Villain hole cards entered via their seat tap (showdown only)
 - Villain notes are session-only — do not persist to future sessions
 
 ### Supported Game Formats (v1.0)
@@ -332,7 +342,7 @@ Hand #1 - QJdd - MP - 50bb eff
 - Preflop fast-forward: Next Street button activates when 2+ committed players, a raise exists, and no committed player faces unresolved aggression — button auto-folds remaining seats and advances to flop
 - Next Street / End Hand button (right of the Control Bar): the only control that advances a street; active on street close or preflop fast-forward; commits fold-out on pending fold
 - Fold-out detection (last player standing wins, hand closes immediately)
-- Showdown overlay (Win / Lose / Chop) triggered on river close with 2+ players
+- Showdown overlay (Win / Lose / Chop) triggered on river close with 2+ players and hero still in; if hero already folded, the hand closes with no overlay (villain cards still recordable)
 - **Skip** and **Move** corner overlay buttons on the table oval — Skip (mid-hand only) freezes the hand like a close: saves it incomplete, "SKIPPED" on the felt, stays on the same number, state preserved so Undo reopens recording. Move ("next hand, new seat") is shown only at `handClosed`/`placingButton` and returns to seat selection (advancing the number from a closed hand). The two split *end this hand* (Skip) from *where the next hand starts* (New Hand same-seat / Move new-seat)
 - Hand outcome summary state — table stays **frozen** on the finished hand (seat actions, positions, dealer button all remain); outcome rendered as felt text in the center; card strip + transcript remain editable, with empty card slots for reached streets gold-bordered as an "enter now" cue; **New Hand** button (gold, right of Undo) is the clean break that advances the hand number and returns to the place-button screen — tapping a seat on the closed table is a no-op
 - `handNumber` single source of truth — advances only when the next hand is dealt (tap a seat from the closed state)
@@ -346,12 +356,12 @@ Hand #1 - QJdd - MP - 50bb eff
 - Aggression symbols: → = post-flop bet; raise pip-layouts: ↑↑ side-by-side (2-bet), triangle (3-bet), 2×2 grid (4-bet), ↑ + badge number (5-bet+)
 - Bet/raise sizing via Raise/Bet button hold — a 0.3s hold reveals a horizontally-scrolling, color-coded sizing chip strip in the utility row to the right of Undo (Next Street is hidden during sizing to give the chips full width; the action row never moves); tapping a chip records the sized action and advances. Quick taps and swipes stay unsized; Undo peels a staged raise in one press. Size shows as a pill on the seat's bottom rim (see `SizingOverhaul.md`)
 - All-in flow — an all-in (Bet/Raise sized `All-in`, or a **call** marked all-in via a Call-button hold) marks the seat with a persistent amber `ALL IN` badge and skips it from all further betting. The hand keeps playing only while ≥2 players have chips; when ≤1 does, it enters **run-out** (action row hidden, felt reads `ALL IN`) and the pulsing **Showdown** button jumps straight to the Win/Lose/Chop overlay — no street-by-street walk, since the hand is decided. The run-out board is entered in the always-live card strip, before or after picking the result. No chip/pot math — the user marks each all-in and a count drives continue-vs-run-out (see `AllInFlow.md`)
+- Villain cards — at showdown, the still-in villains' hole cards are entered in the card strip (appended right of RIVER, horizontally scrollable) via the same hole-card picker; persisted to `Hand.villainCards` and rendered as `CO shows AQs.` transcript lines (see Villain Cards)
 - New Session screen (Cash / Tournament)
 - Login screen (auth buttons wired to state, full auth not yet implemented)
 
 ### Remaining for v1.0
-- Villain profiles with session persistence and swipe-to-bust
-- Villain hole cards entered via seat tap (showdown)
+- Villain profiles with session persistence and swipe-to-bust (tags, descriptor, notes)
 - Full auth: Sign in with Apple, Google, Email + Password
 - Personal hand history screen (History tab)
 - Pro profiles with Live and Past sections
@@ -394,7 +404,7 @@ Hand #1 - QJdd - MP - 50bb eff
 - **`isAutoFolded` naming.** The `isAutoFolded: Bool` flag on `Action` is the batch-rewind marker for *all* system-generated actions — preflop auto-folds (`preflopJump`) and post-flop auto-checks (`postflopJump`). The name is misleading for the check case; rename to `isAutoAction` in a future pass.
 - **Two position-label paths diverge as players fold.** Table display labels (`seatPositions`) are computed over all seats (`Array(0..<tableSize)`), while labels frozen onto `Action` records (`positionFor(seat:)`) use `activeSeatSequence` (active only). These drift apart once seats fold; reconcile in a future pass.
 - **Seat gestures are deliberately one `DragGesture`.** Tap and swipe are classified inside a single `DragGesture(minimumDistance: 0)` in `SeatSelectionView.swift` — do **not** split them into `.onTapGesture` + `.simultaneousGesture` + `.highPriorityGesture`. SwiftUI's arbitration between layered recognizers is fragile (iOS 18 worsens it) and a shared mute-flag gets stuck. See the comment on that gesture for the full rationale. (Sizing is no longer a seat gesture — it lives on the Raise/Bet control-bar buttons, which use the same single-`DragGesture` tap-vs-hold pattern; see `SizingOverhaul.md`.)
-- **Card entry is lossy on save.** The live `CardGroup`/`CardFrame` suit modes (bound/footnote/relationship, explicit `x`) are the faithful artifact only *while recording* — the shorthand transcript renders them in full. On save, `buildHeroCards()` collapses to per-card `Card.suit` (so footnote/relationship distinctions are lost), and board cards (flop/turn/river groups) are not persisted at all. Reconcile when cloud sync / the History screen lands.
+- **Card entry is lossy on save.** The live `CardGroup`/`CardFrame` suit modes (bound/footnote/relationship, explicit `x`) are the faithful artifact only *while recording* — the shorthand transcript renders them in full. On save, `buildHeroCards()` / `buildVillainCards()` collapse to per-card `Card.suit` (so footnote/relationship distinctions are lost), and board cards (flop/turn/river groups) are not persisted at all. Hero and villain cards entered *after* close re-sync onto the saved hand (`syncClosedHandCards()`); board cards still don't. Reconcile when cloud sync / the History screen lands.
 
 ---
 
@@ -511,6 +521,7 @@ heroSeatIndex:    Int
 buttonSeatIndex:  Int
 activeSeatIndices: [Int]  // occupied seats this hand — drives position label calculation
 holeCards:        [Card]  // hero's hole cards, 0–2
+villainCards:     [Int: [Card]] // seatIndex → that villain's shown cards (0–2); showdown only
 streets:          [Street] // only streets that were played
 outcome:          Outcome? // nil if hand abandoned or outcome not recorded
 potSize:          Double?

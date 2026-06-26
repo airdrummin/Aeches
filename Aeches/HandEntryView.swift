@@ -64,12 +64,18 @@ struct HandEntryView: View {
     @State private var flopGroup  = CardGroup(capacity: 3)
     @State private var turnGroup  = CardGroup(capacity: 1)
     @State private var riverGroup = CardGroup(capacity: 1)
+    // Villain hole groups, keyed by seat — entered in the card strip at showdown/close (the seats still
+    // in the hand). Per-hand; cleared on reset. Collapses to `Hand.villainCards` on save.
+    @State private var villainGroups: [Int: CardGroup] = [:]
 
-    // Card picker state. `entryStreet` is the open group (nil = picker closed); `focusIndex` is the
-    // cursor frame within it — the just-ranked frame that a following suit binds to in bound mode.
-    // `entryLocked` is set when a *completed* group is re-opened: its cards are display-only (suits and
-    // shortcuts disabled) until the user types a rank, which clears the group and unlocks fresh entry.
-    @State private var entryStreet: CardStreet? = nil
+    // Card picker state. `entryTarget` is the open group (nil = picker closed): a hero street or a
+    // villain seat. `focusIndex` is the cursor frame within it — the just-ranked frame a following suit
+    // binds to in bound mode. `entryLocked` is set when a *completed* group is re-opened: its cards are
+    // display-only (suits and shortcuts disabled) until the user types a rank, which clears and unlocks.
+    @State private var entryTarget: CardTarget? = nil
+    /// Behavior context for the open group (villain → `.hole`). Every street-keyed picker helper reads
+    /// this, so villain entry reuses the hole logic with no special-casing; identity checks use `entryTarget`.
+    private var entryStreet: CardStreet? { entryTarget?.behaviorStreet }
     @State private var focusIndex: Int = 0
     @State private var entryLocked: Bool = false
 
@@ -953,6 +959,24 @@ struct HandEntryView: View {
         highlightedSeat = nil
     }
 
+    /// Whether the hero is still contesting the hand (not folded).
+    private var heroInHand: Bool { activeSeatSequence.contains(heroSeat ?? -1) }
+
+    /// The hand reached a showdown (2+ players contested the end). If hero is among them, surface the
+    /// Win/Lose/Chop overlay to record the result. If hero already folded, there's no hero outcome to
+    /// pick — close the hand directly with no overlay; the still-in villains' cards stay enterable in
+    /// the showdown row.
+    private func reachShowdown() {
+        if heroInHand {
+            phase = .showdown
+        } else {
+            handCloseSummary = "Showdown"
+            saveCurrentHand(outcome: nil)
+            phase = .handClosed
+            highlightedSeat = nil
+        }
+    }
+
     private func resolveShowdown(outcome: Outcome) {
         switch outcome {
         case .win:  handCloseSummary = "You win"
@@ -1088,6 +1112,14 @@ struct HandEntryView: View {
             if popped?.outcome != nil {
                 phase = .showdown        // re-open the Win/Lose/Chop overlay to re-pick — no peel
                 highlightedSeat = nil
+                return
+            }
+            // Hero-folded villain showdown: closed with no Win/Lose/Chop, and the action log is intact
+            // (the close was the Showdown button, not an erroneous fold). Reopen recording at the last
+            // actor — no peel. A genuine fold-out leaves exactly one seat and falls through to the peel.
+            if (popped?.activeSeatIndices.count ?? 0) >= 2 {
+                phase = .recordingHand
+                highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
                 return
             }
             phase = .recordingHand       // fold-out → re-open recording, then peel the fold below
@@ -1284,12 +1316,12 @@ struct HandEntryView: View {
         // card strip, before or after picking the result. This is the same showdown the river reaches.
         if isRunOut {
             while currentStreet != .river { closeStreet() }
-            if activeSeatSequence.count >= 2 { phase = .showdown }
+            if activeSeatSequence.count >= 2 { reachShowdown() }
             return
         }
         if currentStreet == .river {
             if activeSeatSequence.count >= 2 {
-                phase = .showdown
+                reachShowdown()
             }
         } else {
             closeStreet()
@@ -1456,19 +1488,90 @@ struct HandEntryView: View {
         }
     }
 
+    /// Villain shown cards for the saved Hand, keyed by seat — same per-card bound-only collapse as
+    /// `buildHeroCards` (footnote/relationship modes are faithful only in the live transcript).
+    private func buildVillainCards() -> [Int: [Card]] {
+        var result: [Int: [Card]] = [:]
+        for (seat, g) in villainGroups {
+            let cards: [Card] = g.frames.compactMap { frame in
+                guard let rankStr = frame.rank, let rank = Rank(rawValue: rankStr) else { return nil }
+                let suit = frame.suit.knownSymbol.flatMap { Suit(rawValue: suitKey($0)) }
+                return Card(rank: rank, suit: suit)
+            }
+            if !cards.isEmpty { result[seat] = cards }
+        }
+        return result
+    }
+
+    /// Villain (and hero) cards are entered *after* the hand is saved at close, so re-sync them onto the
+    /// stored Hand whenever a card group is dismissed while closed — keeping the saved record current.
+    private func syncClosedHandCards() {
+        guard phase == .handClosed, !savedHands.isEmpty else { return }
+        savedHands[savedHands.count - 1].holeCards = buildHeroCards()
+        savedHands[savedHands.count - 1].villainCards = buildVillainCards()
+    }
+
     // MARK: - Card Strip
 
+    /// Villains still in the hand at the end (hero excluded) — the seats offered a card group in the
+    /// showdown row. `activeSeatSequence` holds exactly the not-folded seats and stays intact through
+    /// showdown/close.
+    private var showdownVillains: [Int] {
+        activeSeatSequence.filter { $0 != heroSeat }
+    }
+
+    /// The showdown villain row shows only when 2+ seats contested the end: live at the showdown
+    /// overlay, and after close whenever the hand reached a showdown — a hero showdown *or* a
+    /// hero-folded villain showdown (both leave ≥2 in `activeSeatSequence`). A fold-out / skip leaves
+    /// one seat, so nothing shows — there's no one to reveal.
+    private var showdownVillainsVisible: Bool {
+        guard !showdownVillains.isEmpty else { return false }
+        if phase == .showdown { return true }
+        if phase == .handClosed { return activeSeatSequence.count >= 2 }
+        return false
+    }
+
     private var cardStrip: some View {
-        HStack(alignment: .top, spacing: 0) {
-            groupSection(label: "HOLE",  street: .hole,  isActive: entryStreet == .hole)
-            Spacer()
-            groupSection(label: "FLOP",  street: .flop,  isActive: entryStreet == .flop)
-            Spacer()
-            groupSection(label: "TURN",  street: .turn,  isActive: entryStreet == .turn)
-            Spacer()
-            groupSection(label: "RIVER", street: .river, isActive: entryStreet == .river)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 16) {
+                    // Hero hole + board — spread edge-to-edge across one screen width, exactly as before
+                    // (when there are no villains the content fits the viewport and never scrolls).
+                    HStack(alignment: .top, spacing: 0) {
+                        groupSection(label: "HOLE",  target: .street(.hole),  isActive: entryTarget == .street(.hole))
+                        Spacer()
+                        groupSection(label: "FLOP",  target: .street(.flop),  isActive: entryTarget == .street(.flop))
+                        Spacer()
+                        groupSection(label: "TURN",  target: .street(.turn),  isActive: entryTarget == .street(.turn))
+                        Spacer()
+                        groupSection(label: "RIVER", target: .street(.river), isActive: entryTarget == .street(.river))
+                    }
+                    .frame(width: UIScreen.main.bounds.width - 24)
+                    .id("heroStrip")
+
+                    // Showdown only: the still-in villains, appended to the right and scrollable into view.
+                    if showdownVillainsVisible {
+                        ForEach(showdownVillains, id: \.self) { seat in
+                            groupSection(label: positionFor(seat: seat),
+                                         target: .villain(seat),
+                                         isActive: entryTarget == .villain(seat))
+                                .id("villain-\(seat)")
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            .scrollDisabled(!showdownVillainsVisible)
+            // Peek-nudge: when the villain row appears, reveal the first villain, then settle back to the
+            // hero strip — a one-time cue that there's something to add off to the right.
+            .onChange(of: showdownVillainsVisible) { _, visible in
+                guard visible, let first = showdownVillains.first else { return }
+                withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo("villain-\(first)", anchor: .trailing) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                    withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo("heroStrip", anchor: .leading) }
+                }
+            }
         }
-        .padding(.horizontal, 12)
         .animation(.easeInOut(duration: 0.25), value: currentStreet)
     }
 
@@ -1558,12 +1661,12 @@ struct HandEntryView: View {
     /// The group's label row. Hole carries the incognito eye toggle (session-wide) right beside it —
     /// the one place to flip hole-card privacy on/off; other streets are just the label.
     @ViewBuilder
-    private func groupLabel(_ label: String, street: CardStreet, isActive: Bool) -> some View {
+    private func groupLabel(_ label: String, target: CardTarget, isActive: Bool) -> some View {
         let title = Text(label)
             .font(.system(size: 9, weight: .bold))
             .tracking(1.5)
             .foregroundStyle(isActive ? Color.gold : Color.textMuted)
-        if street == .hole {
+        if target == .street(.hole) {
             HStack(spacing: 5) {
                 title
                 Button(action: { incognito.toggle() }) {
@@ -1597,13 +1700,22 @@ struct HandEntryView: View {
         (phase == .showdown || phase == .handClosed) && streetWasReached(street)
     }
 
+    /// Gold "enter now" cue for any entry target. Hero streets reuse the per-street rule; a villain's
+    /// empty slots are cued whenever the showdown villain row is showing (they reached showdown).
+    private func promptCardEntry(for target: CardTarget) -> Bool {
+        switch target {
+        case .street(let s): return promptCardEntry(for: s)
+        case .villain:       return showdownVillainsVisible
+        }
+    }
+
     /// A street group: rank-forward card faces, with a caption hanging beneath the group. The caption
     /// encodes the unassigned suit info — footnote letters (`dx`, `hhx`) or a relationship word
     /// (`suited`, `two tone`). Bound mode shows its suits ON the faces and has no caption. The caption
     /// row reserves a fixed height so the faces stay baseline-aligned across all four groups.
     @ViewBuilder
-    private func groupSection(label: String, street: CardStreet, isActive: Bool) -> some View {
-        let g = group(for: street)
+    private func groupSection(label: String, target: CardTarget, isActive: Bool) -> some View {
+        let g = group(for: target)
         let anyKnown = g.frames.contains { $0.suit.knownSymbol != nil }
         // A footnote whose every entered letter is the SAME real suit means we know each card's suit
         // (QJcc, JThh, Q53hhh) — so color the faces, display-only. The mode stays .footnote and the
@@ -1615,12 +1727,12 @@ struct HandEntryView: View {
         // texture. (bound / uniform-footnote stay on the faces; none → no pill.) See DisplayLayoutPlan.md.
         let glyphSet: [String]? = (g.mode == .footnote && footnoteSuit == nil) ? footnoteGlyphs(g) : nil
         let relWord: String? = (g.mode == .relationship) ? relationshipWord(g.relationship) : nil
-        let faceDown = incognito && street == .hole   // incognito hides only the hero's hole faces
+        let faceDown = incognito && target == .street(.hole)   // incognito hides only the hero's hole faces
         // In incognito the hole's caption is the single read-out (the pill is omitted, below). The caption
         // blurs whenever the hole bank isn't selected, and clears again when you re-select your cards.
-        let hideReadouts = faceDown && entryStreet != .hole
+        let hideReadouts = faceDown && entryTarget != .street(.hole)
         VStack(spacing: 6) {
-            groupLabel(label, street: street, isActive: isActive)
+            groupLabel(label, target: target, isActive: isActive)
 
             HStack(spacing: 4) {
                 ForEach(g.frames.indices, id: \.self) { i in
@@ -1635,10 +1747,10 @@ struct HandEntryView: View {
                             (g.frames[i].suit == .unknown || (g.frames[i].suit == .unspecified && anyKnown)),
                         suitRun: g.suitRun,   // turn/river board count → repeated pips (1 elsewhere)
                         faceDown: faceDown,
-                        isActive: entryStreet == street && focusIndex == i,
-                        promptEmpty: promptCardEntry(for: street)
+                        isActive: entryTarget == target && focusIndex == i,
+                        promptEmpty: promptCardEntry(for: target)
                     )
-                    .onTapGesture { openCardEntry(street) }
+                    .onTapGesture { openCardEntry(target) }
                 }
             }
             .padding(.horizontal, 6)
@@ -1662,7 +1774,7 @@ struct HandEntryView: View {
             // picker never slides as you type.
             // Incognito: the hole caption is readable while the hole bank is selected (you tapped your
             // cards), and blurs whenever it isn't — so "peek" is just re-selecting hole. Board never hides.
-            let notation = groupNotation(street)
+            let notation = groupNotation(g)
             Text(notation.isEmpty ? " " : notation)
                 .font(.custom("Courier New", size: 13))
                 .fontWeight(.bold)
@@ -1691,7 +1803,8 @@ struct HandEntryView: View {
     // are in AND no specific suit has been committed (mode none or relationship) — and never for a
     // hole pair (no 88s; 88o is assumed, never written). So at "both ranks, nothing chosen" both sets
     // are live; the first suit turns s/o off, the first s/o turns suits off.
-    private var entryGroup: CardGroup? { entryStreet.map { group(for: $0) } }
+    private var entryGroup: CardGroup? { entryTarget.map { group(for: $0) } }
+    private func setEntryGroup(_ g: CardGroup) { if let t = entryTarget { setGroup(t, g) } }
 
     private var suitsActive: Bool {
         guard !entryLocked, let g = entryGroup else { return false }
@@ -1712,11 +1825,16 @@ struct HandEntryView: View {
     /// keyed `"As"` — excluding one frame (the cursor, so re-binding its own card never blocks itself).
     /// Only bound frames carry a known per-card suit, so this is inherently "bound only": footnote and
     /// relationship suits are unassigned and contribute nothing.
-    private func usedCardKeys(excluding street: CardStreet?, index: Int?) -> Set<String> {
+    private func usedCardKeys(excluding exclude: CardTarget?, index: Int?) -> Set<String> {
         var keys = Set<String>()
-        for (s, g) in [(CardStreet.hole, holeGroup), (.flop, flopGroup), (.turn, turnGroup), (.river, riverGroup)] {
+        var groups: [(CardTarget, CardGroup)] = [
+            (.street(.hole), holeGroup), (.street(.flop), flopGroup),
+            (.street(.turn), turnGroup), (.street(.river), riverGroup)
+        ]
+        for (seat, g) in villainGroups { groups.append((.villain(seat), g)) }
+        for (target, g) in groups {
             for (i, f) in g.frames.enumerated() {
-                if s == street, i == index { continue }
+                if target == exclude, i == index { continue }
                 if let r = f.rank, let sym = f.suit.knownSymbol { keys.insert(r + suitLetter(sym)) }
             }
         }
@@ -1725,13 +1843,12 @@ struct HandEntryView: View {
 
     /// True when binding `suit` to the cursor card would re-create a card already in the hand — so the
     /// suit button is disabled. Only fires on the bound path (a suit that appends to a footnote isn't a
-    /// concrete card and can't duplicate).
+    /// concrete card and can't duplicate). Spans hero, board, and villain groups.
     private func suitIsDuplicate(_ suit: String) -> Bool {
-        guard let street = entryStreet else { return false }
-        let g = group(for: street)
+        guard let g = entryGroup else { return false }
         let willBind = g.mode == .bound || (g.mode == .none && (g.capacity == 1 || g.firstEmptyIndex != nil))
         guard willBind, focusIndex < g.frames.count, let rank = g.frames[focusIndex].rank else { return false }
-        return usedCardKeys(excluding: street, index: focusIndex).contains(rank + suitLetter(suit))
+        return usedCardKeys(excluding: entryTarget, index: focusIndex).contains(rank + suitLetter(suit))
     }
 
     // Docked below the strip (not a covering sheet). The strip slots are the frames — they stay
@@ -1811,9 +1928,13 @@ struct HandEntryView: View {
     /// The advance control: a 30×40 gold tile, `›` to jump to the next bank (hole → flop → turn →
     /// river), or `✓` on the river (no next bank) to dismiss.
     private var nextBankButton: some View {
-        let isRiver = entryStreet == .river
+        // Done (✓) on the last bank — the river, or any villain group (a single hole bank).
+        let isLastBank: Bool = {
+            if case .villain = entryTarget { return true }
+            return entryStreet == .river
+        }()
         return Button(action: advanceOrFinishEntry) {
-            Image(systemName: isRiver ? "checkmark" : "chevron.right")
+            Image(systemName: isLastBank ? "checkmark" : "chevron.right")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color(hex: "#0D0D0D"))
                 .frame(width: 30, height: 40)
@@ -2026,7 +2147,7 @@ struct HandEntryView: View {
     /// seed the draft from any existing value (so re-tapping edits in place), and show the keypad.
     private func openEffEntry() {
         withAnimation(.easeInOut(duration: 0.2)) {
-            entryStreet = nil
+            entryTarget = nil
             sizingRowVisible = false
             effDraft = effectiveStack.map(String.init) ?? ""
             // A re-opened set value is shown as a preview but is display-only: the first digit clears
@@ -2246,6 +2367,21 @@ struct HandEntryView: View {
         }
     }
 
+    /// What the card picker is currently editing: a hero street (hole/board) or a villain's hole cards
+    /// (by seat). A villain entry *behaves* exactly like hole entry — 2 frames, `s`/`o`, bound/footnote,
+    /// no board-count — so `behaviorStreet` maps it to `.hole` and every street-keyed helper works
+    /// unchanged; only group routing and identity (which slot is highlighted) key off the target.
+    enum CardTarget: Equatable {
+        case street(CardStreet)
+        case villain(Int)        // seat index
+        var behaviorStreet: CardStreet {
+            switch self {
+            case .street(let s): return s
+            case .villain:       return .hole
+            }
+        }
+    }
+
     /// The live group for a street.
     private func group(for street: CardStreet) -> CardGroup {
         switch street {
@@ -2265,19 +2401,37 @@ struct HandEntryView: View {
         }
     }
 
+    /// The live group for any entry target — hero street or villain seat.
+    private func group(for target: CardTarget) -> CardGroup {
+        switch target {
+        case .street(let s):    return group(for: s)
+        case .villain(let seat): return villainGroups[seat] ?? CardGroup(capacity: 2)
+        }
+    }
+
+    private func setGroup(_ target: CardTarget, _ g: CardGroup) {
+        switch target {
+        case .street(let s):    setGroup(s, g)
+        case .villain(let seat): villainGroups[seat] = g
+        }
+    }
+
     /// Opening a group focuses the left-most empty frame (or card 1 if full); entry is always
     /// left-to-right, so the tapped slot index is ignored. Re-opening never mutates the cards — a
     /// finished group is cleared only when you start typing a new rank (see `rankTapped`).
-    private func openCardEntry(_ street: CardStreet) {
-        entryStreet = street
+    private func openCardEntry(_ street: CardStreet) { openCardEntry(.street(street)) }
+
+    private func openCardEntry(_ target: CardTarget) {
+        entryTarget = target
         effEntryVisible = false         // close the eff keypad so the two never show at once
-        let g = group(for: street)
+        let g = group(for: target)
         entryLocked = g.isFull          // re-opening a finished group → display-only until a rank is typed
         focusIndex = g.firstEmptyIndex ?? 0
     }
 
     private func closeEntry() {
-        entryStreet = nil    // no mutation; any blank renders as "x" via notation
+        entryTarget = nil    // no mutation; any blank renders as "x" via notation
+        syncClosedHandCards()   // post-close card edits (hero or villain) re-sync onto the saved Hand
     }
 
     /// The bank that "Next" advances to, in deal order. Nil after the river (Next becomes Done).
@@ -2293,8 +2447,8 @@ struct HandEntryView: View {
     /// "Next" / "Done": jump to the next bank for rapid sequential entry, or dismiss on the river.
     /// Advancing never requires the current bank to be full — you can skip cards and tap back.
     private func advanceOrFinishEntry() {
-        guard let street = entryStreet else { return }
-        if let next = nextCardStreet(after: street) {
+        // Only hero streets have a "next bank"; a villain group is a single bank, so Next = Done.
+        if case .street(let street) = entryTarget, let next = nextCardStreet(after: street) {
             withAnimation(.easeInOut(duration: 0.15)) { openCardEntry(next) }
         } else {
             closeEntry()
@@ -2302,8 +2456,8 @@ struct HandEntryView: View {
     }
 
     private func clearEntryGroup() {
-        guard let street = entryStreet else { return }
-        var g = group(for: street); g.reset(); setGroup(street, g)
+        guard var g = entryGroup else { return }
+        g.reset(); setEntryGroup(g)
         focusIndex = 0
     }
 
@@ -2312,9 +2466,8 @@ struct HandEntryView: View {
     /// and parks the cursor there — the cursor is always "the card you just typed," so a following suit
     /// binds to it.
     private func rankTapped(_ r: String) {
-        guard let street = entryStreet else { return }
+        guard var g = entryGroup else { return }
         entryLocked = false             // typing a rank begins fresh entry, releasing the re-open lock
-        var g = group(for: street)
         if g.isFull {
             g.reset()
             g.frames[0].rank = r
@@ -2324,15 +2477,14 @@ struct HandEntryView: View {
             g.frames[i].rank = r
             focusIndex = i
         }
-        setGroup(street, g)
+        setEntryGroup(g)
     }
 
     /// Tap a suit (`♠♥♦♣`) or the unknown `x` (`symbol == nil`). The first suit of the group sets the
     /// mode via the first-suit rule: an empty rank frame still open → bound (suit binds to the
     /// just-ranked cursor card); all ranks in → footnote (append to the unassigned note).
     private func suitTapped(_ symbol: String?) {
-        guard let street = entryStreet else { return }
-        var g = group(for: street)
+        guard let street = entryStreet, var g = entryGroup else { return }
         // Gating disables suits in relationship mode and before any rank; this guard is belt-and-
         // suspenders. The cursor stays put — a suit always binds to the card you're on, and the next
         // rank (which clears a full group) is what starts a new hand.
@@ -2372,20 +2524,19 @@ struct HandEntryView: View {
         case .relationship, .none:
             break
         }
-        setGroup(street, g)
+        setEntryGroup(g)
     }
 
     /// Tap a relationship/texture shortcut (`s`/`o` hole; `r`/`m`/`tt` flop). Sets relationship mode,
     /// clearing any bound suits and footnote. Gated to a fully-ranked group.
     private func shortcutTapped(_ value: String) {
-        guard let street = entryStreet else { return }
-        var g = group(for: street)
+        guard var g = entryGroup else { return }
         guard g.isFull else { return }   // gating belt-and-suspenders (the button is also dimmed)
         g.mode = .relationship
         g.relationship = value
         g.footnote = []; g.footnoteCursor = 0
         for i in g.frames.indices { g.frames[i].suit = .unspecified }
-        setGroup(street, g)
+        setEntryGroup(g)
     }
 
     /// The board-count steps for a street's ×N multipliers and the re-tap cycle. Turn maxes at 4 of a
@@ -2398,11 +2549,10 @@ struct HandEntryView: View {
     /// Tap a ×N multiplier on a turn/river card: set the board count directly. Requires a real suit
     /// already chosen (an `x` or blank can't be multiplied).
     private func multiplierTapped(_ n: Int) {
-        guard let street = entryStreet, street == .turn || street == .river else { return }
-        var g = group(for: street)
+        guard let street = entryStreet, street == .turn || street == .river, var g = entryGroup else { return }
         guard g.frames.first?.suit.knownSymbol != nil else { return }
         g.suitRun = n
-        setGroup(street, g)
+        setEntryGroup(g)
     }
 
     // MARK: - Card Notation (group readout — see ShorthandReference.md §2)
@@ -2417,8 +2567,10 @@ struct HandEntryView: View {
     /// The group's compact shorthand (see ShorthandReference.md §2), driven by its suit mode:
     /// none `AJ` · bound `AdJx` · footnote `AJdx` (letters padded to N with `x`) · relationship
     /// `AJs`/`Q53tt`. Single-frame groups (turn/river) are bound-only and never mark an unknown.
-    private func groupNotation(_ street: CardStreet) -> String {
-        let g = group(for: street)
+    private func groupNotation(_ street: CardStreet) -> String { groupNotation(group(for: street)) }
+
+    /// Notation for an explicit group (used for villain hole groups as well as the hero streets).
+    private func groupNotation(_ g: CardGroup) -> String {
         let ranks = g.frames.compactMap { $0.rank }
         guard !ranks.isEmpty else { return "" }
         let rankStr = ranks.joined()
@@ -2507,6 +2659,14 @@ struct HandEntryView: View {
 
             segments += collapsedSegments(pairs)
             if !segments.isEmpty { lines.append(segments.joined(separator: ". ") + ".") }
+        }
+
+        // Villain shown cards (showdown) — "CO shows AQs." lines, before any result line (§9).
+        if showdownVillainsVisible {
+            for seat in showdownVillains {
+                let note = villainGroups[seat].map(groupNotation) ?? ""
+                if !note.isEmpty { lines.append("\(positionFor(seat: seat)) shows \(note).") }
+            }
         }
 
         // Showdown result line (fold-out has no tag — the final fold ends it).
@@ -2604,7 +2764,8 @@ struct HandEntryView: View {
         flopGroup  = CardGroup(capacity: 3)
         turnGroup  = CardGroup(capacity: 1)
         riverGroup = CardGroup(capacity: 1)
-        entryStreet = nil
+        villainGroups = [:]
+        entryTarget = nil
         focusIndex  = 0
         entryLocked = false
         currentStreet = .preflop
@@ -2639,6 +2800,7 @@ struct HandEntryView: View {
             buttonSeatIndex: buttonSeat ?? 0,
             activeSeatIndices: activeSeatSequence,
             holeCards: buildHeroCards(),
+            villainCards: buildVillainCards(),
             streets: streetsToSave,
             outcome: outcome,
             potSize: nil,

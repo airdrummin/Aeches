@@ -225,8 +225,9 @@ QQJhhx. BB bet. HJ fold. Hero call.
 
 - **Fold-out:** ends on the final `fold` — **no winner tag**. The last player standing is implied.
 - **Showdown:** the outcome isn't derivable from the action, so append a **minimal result line** from the
-  recorded `Outcome`: `Hero wins.` / `Hero loses.` / `Chop.` If villain hole cards were entered (future),
-  precede it: `BTN shows KK. Hero wins.`
+  recorded `Outcome`: `Hero wins.` / `Hero loses.` / `Chop.` When villain hole cards were entered (the
+  still-in seats, via the card strip — see README "Villain Cards"), one `shows` line per villain
+  precedes the result, in seat order: `CO shows AQs. BB shows JJ. Hero wins.`
 
 ---
 

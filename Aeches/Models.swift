@@ -138,6 +138,7 @@ struct Hand: Identifiable, Codable {
     var buttonSeatIndex:  Int
     var activeSeatIndices: [Int]   // occupied seats this hand — drives position label calculation
     var holeCards:        [Card]   = []   // hero's cards, 0–2
+    var villainCards:     [Int: [Card]] = [:]  // seatIndex → that villain's shown cards (0–2); showdown only
     var streets:          [Street] = []   // only streets that were played
     var outcome:          Outcome?
     var potSize:          Double?
