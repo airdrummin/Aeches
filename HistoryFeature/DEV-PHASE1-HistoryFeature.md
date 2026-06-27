@@ -31,12 +31,26 @@ the flat `[Card]` arrays become *derived* for simple consumers.
 - `CardGroup`, `CardFrame`, and their enums (suit mode, frame-suit state) currently live in
   `HandEntryView.swift`. Move them to `Models.swift`, conform to `Codable` (+ `Equatable` for the
   round-trip test). Keep the live UI referencing the same types — no behavior change, just relocation.
-- **Tighten `CardFrame.rank` from `String?` to `Rank?`** as part of the move (locked decision). Suits
-  stay the loose `FrameSuit` + group suit-mode system — that's what carries footnote/relationship
-  fuzziness, so bound/footnote/relationship are untouched. Convert at the one spot the picker records a
-  rank tap (`rankRow`, `HandEntryView` :2290/:1876 use `"T"` for ten); `groupNotation` (:2577) reads
+- **Tighten `CardFrame.rank` from `String?` to `Rank?`** as part of the move (locked decision).
+  Convert at the one spot the picker records a rank tap (`rankRow`, `HandEntryView` :2290/:1876 use
+  `"T"` for ten — already `Rank.ten.rawValue`, so no drift); `groupNotation` (:2577) reads
   `Rank.rawValue`. A rank is never fuzzy, so nothing is lost and `T`-vs-`"10"` drift in the saved
   format becomes impossible.
+- **Tighten `FrameSuit.known` from a glyph `String` to the `Suit` enum** (Option B, locked decision).
+  Only the *known* (bound) suit is concrete, so it becomes typed; the rest of `FrameSuit`
+  (`.unspecified`, `.unknown` = explicit `x`) and the group suit-mode system (footnote letters,
+  relationship texture) stay loose — that's what carries footnote/relationship fuzziness, so those
+  modes are untouched. **No `"s"` collision:** spades (a bound suit in the frame's `suit` field) and
+  "suited" (a texture in the group's `relationship` field, still a plain `String`) live in separate
+  fields under mutually-exclusive modes, and we persist the structured group rather than a parsed
+  notation string — so `Suit.spades.rawValue == "s"` is unambiguous. Touch points where `known` is
+  read/written (glyph → `Suit`, render via `Suit.symbol`):
+  - **picker suit buttons** (`suitTapped`, :2489) — set `.known(Suit)` instead of a glyph string;
+  - **on-card render** (`groupNotation` `.bound` case :2598, `CardFrameView`) — draw `s.symbol`,
+    repeated by `suitRun`;
+  - **duplicate-card block** — compare `Suit` directly instead of glyph strings;
+  - the `suitKey`/`suitLetter`/`knownSymbol` glyph↔letter helpers mostly fold away once the payload
+    is a `Suit` (`buildHeroCards`/`buildVillainCards` become trivial — the suit is already a `Suit`).
 
 ### `Hand` changes
 Add the canonical groups; keep flat arrays as **computed** derivations (so existing readers/marketplace
@@ -79,18 +93,26 @@ var showdownSeatIndices: [Int] {
 ## Changes — file by file
 
 - **`Models.swift`**
-  - Add `CardGroup` / `CardFrame` / suit-mode + frame-suit enums (moved from `HandEntryView`),
-    `Codable` + `Equatable`, with `asCards`.
+  - Add `CardGroup` / `CardFrame` / suit-mode + `FrameSuit` enums (moved from `HandEntryView`),
+    `Codable` + `Equatable`, with `asCards`. `FrameSuit.known` now carries a `Suit` (Option B); the
+    `Suit` enum is unchanged (short raw values `s/h/d/c` stay).
   - Update `Hand`: new fields above; computed `holeCards`/`villainCards`/`board`; remove the old
     stored card arrays and `activeSeatIndices`.
   - Confirm `calculatePositions` now reads `occupiedSeatIndices` semantics (callers pass occupied).
 - **`HandEntryView.swift`**
-  - Remove the local `CardGroup`/`CardFrame` definitions (now in `Models`).
+  - Remove the local `CardGroup`/`CardFrame`/`FrameSuit` definitions (now in `Models`).
+  - Retype `FrameSuit.known` usage glyph→`Suit` at every touch point listed under *Design* above
+    (picker buttons, on-card render, duplicate block, helper fold-away).
   - Rewrite `buildHand` to populate the canonical groups (`holeGroup`, `flop/turn/riverGroup`,
     `villainGroups`), `tableSize`, and `occupiedSeatIndices = occupiedSeats`. Street records keep
     **actions only** (`showdownSeatIndices` is now derived, not written).
-  - `buildHeroCards`/`buildVillainCards`/`syncClosedHandCards` either deleted or reduced to writing
-    the groups (no flat-card collapse).
+  - `buildHeroCards`/`buildVillainCards` collapse away (the flat `[Card]` is now derived on `Hand`).
+  - **Rewrite `syncClosedHandCards` (:1508) to write the groups, not the flat arrays** — *required*,
+    because `Hand.holeCards`/`villainCards` become computed (get-only) and the old assignments stop
+    compiling. It must copy `holeGroup`, `villainGroups`, **and the board groups
+    (`flopGroup`/`turnGroup`/`riverGroup`)** onto the saved hand, so a card edited on the frozen
+    closed table — hero, villain, *or board* — persists (closing the post-close board-edit gap that
+    exists today, where only hero/villain re-synced and the board wasn't stored at all).
 
 ## Verification (action-tested)
 

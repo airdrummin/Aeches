@@ -12,15 +12,17 @@ where we are.
 
 ## Locked decisions (from review)
 
-> Second review pass (2026-06-27) added/clarified the **store write path**, **card rank typing**,
+> Second review pass (2026-06-27) added/clarified the **store write path**, **card field typing**,
 > **edit navigation**, and **verification** rows.
+> Third pass (2026-06-27) tightened the **bound suit** to the `Suit` enum (Option B) and made
+> **post-close re-sync** of board + hero + villain cards explicit (see Phase 1).
 
 | Decision | Choice | Why |
 |---|---|---|
 | Local store tech | **Codable → JSON behind a `HandStore` protocol** | Keeps the pure-struct models; JSON is inspectable/resettable while testing; cloud sync later is a new protocol conformer, not a rewrite. |
 | Store write path | **Per-hand granular write** (`SessionStore.saveHand`) is the primary path; whole-store save is the debounced cold flush only | Keeps the seam server-friendly — a future cloud conformer maps "save this one hand" to one document write, no consumer change. (v1 file impl still rewrites the single JSON; fine at ~8–12 hands/session.) |
 | Card fidelity | **Fully lossless** — the `CardGroup` becomes the canonical, `Codable` card model | "All details entered must be retrievable." Footnote/relationship/board data is *dropped* today; that ends. |
-| Card rank typing | **`rank` is the `Rank` enum** (suits stay the loose `FrameSuit` + group suit-mode system) | A rank is never fuzzy, so typing it loses nothing and kills `T`-vs-`"10"` drift in the permanent, synced format. Bound/footnote/relationship suit modes are untouched. |
+| Card field typing | **`rank` is the `Rank` enum; a bound suit is the `Suit` enum** (Option B). The `FrameSuit`/group suit-mode system stays for fuzziness — `.unspecified`/`.unknown`(`x`), footnote, and relationship are untouched | Neither a rank nor a *known* suit is ever fuzzy, so typing both loses nothing and kills `T`-vs-`"10"` and `"♦"`-vs-`"d"` drift in the permanent, synced format. Only `FrameSuit.known`'s payload changes (glyph `String` → `Suit`); footnote/relationship fuzziness is carried as before. No `"s"`(spades)-vs-`"s"`(suited) collision: the bound suit lives in the frame's `suit` field, the texture in the group's `relationship` field, and modes are mutually exclusive — and we persist the structured group, never a parsed notation string. |
 | Replay style | **Step through streets (tap to advance)** | Deterministic, reuses the per-street renderer, minimal motion work. |
 | Edit model | **Rehydrate the saved `Hand` back into `HandEntryView`** | One recording engine, reused for new + edited hands (DRY). Requires lossless persistence (above). |
 | Edit navigation | **Reuse the single recording screen — no modal.** Entering Edit auto-saves the in-progress live hand Skip-style (resumable via Undo), then loads the hand being edited | One screen; leans on the existing Skip→Undo machinery so an interrupted live hand is preserved, not lost or duplicated. |
