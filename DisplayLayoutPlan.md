@@ -47,13 +47,20 @@ appears — **no device-specific code**.
 ## Locked spec
 
 ### #1 — Table (the hero)
-- **Aspect-lock at 1.40.** Replace `ry = h * 0.36` with `ry = rx / 1.4` (vertical radius
-  derived from width, not frame height). The oval can no longer distort — frame height
-  becomes pure margin around it.
+- **Racetrack (stadium) silhouette.** The table is a `Racetrack` shape (flat top/bottom,
+  semicircular ends — real casino proportion), not an ellipse. Every layer (rail, felt,
+  pinstripe, stitching, shadows) is framed from this one shape; the dealer gap is an open
+  sub-path in it, not a two-arc trim. See `SeatSelectionView.swift`.
+- **Aspect-lock at 1.80.** `ry = rx / 1.8` (vertical radius derived from width, not frame
+  height) — the table can't distort, and the proportion is wide/short enough to read as a real
+  table while still filling most of the height it would otherwise leave as margin.
 - **Frame clamp: `minHeight 290`, soft `maxHeight ~360`.** Min guarantees swipe room; with
   aspect-lock the max is only about limiting whitespace, not shape.
-- **`rx` stays `w * 0.40`** (current width). Not widening the table now; revisit later if it
-  reads small.
+- **`rx` stays `w * 0.40`** (current width). Width is effectively maxed: the side (cap) seats
+  already sit near the screen edge, so widening `rx` pushes them and their pills off-screen.
+- **Seats ride the rail.** `seatPosition` walks the racetrack perimeter just outside the rail,
+  expanded anisotropically (small on the sides, more on the flat top/bottom) so the side seats
+  stay on-screen and the top/bottom seats lift cleanly off the rail.
 - **One sizing for all phases** — seat-select through showdown use the same table. On
   seat-select (no dock below) the frame simply absorbs more slack as margin → the large
   centered oval we already show there.

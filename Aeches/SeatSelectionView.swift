@@ -49,9 +49,11 @@ struct TableOvalView: View {
     @State private var touchSeat: Int? = nil        // seat under the active touch
     @State private var touchMoved: Bool = false      // moved past the tap threshold (→ swipe, not tap)
 
-    // Rail gap at top — trim coordinates (0=right, 0.25=bottom, 0.5=left, 0.75=top)
-    private let gapCenter: Double = 0.75
-    private let gapHalf:   Double = 0.07   // ~50° of arc left open for dealer
+    // Dealer gap at top, as a fraction of each shape's width on either side of top-center.
+    // The pinstripe sits inside the rail (narrower frame), so a slightly larger fraction keeps
+    // the two gaps visually aligned at the top. See `Racetrack`.
+    private let railGapFrac: CGFloat = 0.15
+    private let pinGapFrac:  CGFloat = 0.17
 
     var body: some View {
         GeometryReader { geo in
@@ -60,30 +62,32 @@ struct TableOvalView: View {
             let cx = w / 2
             let cy = h / 2
             let rx = w * 0.40
-            // Aspect-lock: the vertical radius is derived from the horizontal one (a fixed 1.40
-            // width:height ratio) rather than from the frame height. This makes the oval
-            // incapable of distorting — extra frame height becomes pure margin around it, never a
-            // rounder egg. See DisplayLayoutPlan.md §#1.
-            let ry = rx / 1.4
+            // Aspect-lock: the vertical radius is derived from the horizontal one (a fixed
+            // width:height ratio) rather than from the frame height, so the table can never
+            // distort — extra frame height becomes pure margin around it. Real poker tables run
+            // ~2:1; this racetrack uses 1.8:1 so the table itself fills most of the height it would
+            // otherwise leave as margin. Width stays at 0.40·w because the side (cap) seats already
+            // sit near the screen edge (see seatPosition). See DisplayLayoutPlan.md §#1.
+            let ry = rx / 1.8
             let railW = w * 0.045
 
             ZStack {
 
                 // ── Depth shadows ──────────────────────────────────────
-                Ellipse()
+                Racetrack()
                     .fill(Color.black.opacity(0.5))
                     .frame(width: rx * 2 + railW + 18, height: ry * 2 + railW + 10)
                     .offset(y: 14)
                     .blur(radius: 14)
 
-                Ellipse()
+                Racetrack()
                     .fill(Color.black.opacity(0.7))
                     .frame(width: rx * 2 + railW + 8, height: ry * 2 + railW + 4)
                     .offset(y: 7)
                     .blur(radius: 5)
 
                 // ── Outer rim ─────────────────────────────────────────
-                Ellipse()
+                Racetrack()
                     .fill(Color(hex: "#1A0E00"))
                     .frame(width: rx * 2 + railW + 3, height: ry * 2 + railW + 3)
 
@@ -100,33 +104,20 @@ struct TableOvalView: View {
                     endPoint: .bottom
                 )
 
-                // Arc 1: from gapEnd → right side (trim: gapCenter+gapHalf → 1.0)
-                Ellipse()
-                    .trim(from: gapCenter + gapHalf, to: 1.0)
-                    .stroke(railGradient, style: StrokeStyle(lineWidth: railW, lineCap: .round))
-                    .frame(width: rx * 2, height: ry * 2)
-
-                // Arc 2: from right side → gapStart (trim: 0 → gapCenter-gapHalf)
-                Ellipse()
-                    .trim(from: 0, to: gapCenter - gapHalf)
+                // Rail — a single open racetrack stroke with a dealer gap at top-center; the round
+                // line cap rounds off the two rail tips that frame the dealer station.
+                Racetrack(gapFrac: railGapFrac)
                     .stroke(railGradient, style: StrokeStyle(lineWidth: railW, lineCap: .round))
                     .frame(width: rx * 2, height: ry * 2)
 
                 // ── Specular highlight on top of rail ──────────────────
-                Ellipse()
-                    .trim(from: gapCenter + gapHalf, to: 1.0)
-                    .stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: railW * 0.35, lineCap: .round))
-                    .frame(width: rx * 2, height: ry * 2)
-                    .offset(y: -railW * 0.15)
-
-                Ellipse()
-                    .trim(from: 0, to: gapCenter - gapHalf)
+                Racetrack(gapFrac: railGapFrac)
                     .stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: railW * 0.35, lineCap: .round))
                     .frame(width: rx * 2, height: ry * 2)
                     .offset(y: -railW * 0.15)
 
                 // ── Felt surface ───────────────────────────────────────
-                Ellipse()
+                Racetrack()
                     .fill(
                         RadialGradient(
                             stops: [
@@ -143,7 +134,7 @@ struct TableOvalView: View {
                     .frame(width: rx * 1.88, height: ry * 1.88)
 
                 // Felt vignette
-                Ellipse()
+                Racetrack()
                     .fill(
                         RadialGradient(
                             colors: [Color.clear, Color.black.opacity(0.5)],
@@ -154,27 +145,21 @@ struct TableOvalView: View {
                     )
                     .frame(width: rx * 1.88, height: ry * 1.88)
 
-                // ── Brass pinstripe — two arcs ─────────────────────────
+                // ── Brass pinstripe — single open racetrack ────────────
                 let pinW: CGFloat = rx * 1.72
                 let pinH: CGFloat = ry * 1.72
 
-                Ellipse()
-                    .trim(from: gapCenter + gapHalf + 0.01, to: 1.0)
-                    .stroke(Color(hex: "#C99A3A"), lineWidth: 1.5)
-                    .frame(width: pinW, height: pinH)
-
-                Ellipse()
-                    .trim(from: 0, to: gapCenter - gapHalf - 0.01)
+                Racetrack(gapFrac: pinGapFrac)
                     .stroke(Color(hex: "#C99A3A"), lineWidth: 1.5)
                     .frame(width: pinW, height: pinH)
 
                 // ── Inner shadow groove ────────────────────────────────
-                Ellipse()
+                Racetrack()
                     .stroke(Color.black.opacity(0.65), lineWidth: 3)
                     .frame(width: pinW - 4, height: pinH - 4)
 
                 // ── Stitching ring ─────────────────────────────────────
-                Ellipse()
+                Racetrack()
                     .stroke(
                         Color(hex: "#FFE6A0").opacity(0.09),
                         style: StrokeStyle(lineWidth: 1, dash: [3, 3])
@@ -651,33 +636,85 @@ struct DealerPuck: View {
     }
 }
 
-// MARK: - Felt Shape (clips dealer gap at top)
+// MARK: - Racetrack Shape
 
-struct TableFeltShape: Shape {
-    let rx: CGFloat
-    let ry: CGFloat
+/// A stadium / racetrack outline: flat top & bottom, semicircular left & right ends (corner
+/// radius = half the frame height). The single source of the table's silhouette — every layer
+/// (rail, felt, pinstripe, stitching, shadows) is framed from this so they all share one shape.
+///
+/// `gapFrac` > 0 opens a dealer gap centered on the TOP edge, given as a fraction of the frame
+/// width on each side of top-center. The path then traces clockwise from the gap's right edge all
+/// the way around to its left edge as one *open* sub-path, so a round-capped stroke yields the two
+/// rail tips that frame the dealer station. `gapFrac == 0` is a closed loop (used for the fills).
+struct Racetrack: Shape {
+    var gapFrac: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
-        let cx = rect.midX
-        let cy = rect.midY
-        var path = Path()
-        path.addEllipse(in: CGRect(x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2))
-        return path
+        let r   = rect.height / 2          // corner radius = half-height → true stadium
+        let cx  = rect.midX
+        let cy  = rect.midY
+        let top = rect.minY
+        let bot = rect.maxY
+        let leftC  = rect.minX + r         // center-x of the left end cap
+        let rightC = rect.maxX - r         // center-x of the right end cap
+
+        var p = Path()
+        guard gapFrac > 0 else {
+            p.addRoundedRect(in: rect, cornerSize: CGSize(width: r, height: r))
+            return p
+        }
+
+        let gx = rect.width * gapFrac      // half-gap, measured along the top straight
+        // Clockwise from the gap's right edge: top straight → right cap → bottom straight → left cap
+        // → top straight back to the gap's left edge. Angles: 0°=east, 90°=south (y grows down).
+        p.move(to: CGPoint(x: cx + gx, y: top))
+        p.addLine(to: CGPoint(x: rightC, y: top))
+        p.addRelativeArc(center: CGPoint(x: rightC, y: cy), radius: r,
+                         startAngle: .degrees(-90), delta: .degrees(180))   // → (rightC, bot)
+        p.addLine(to: CGPoint(x: leftC, y: bot))
+        p.addRelativeArc(center: CGPoint(x: leftC, y: cy), radius: r,
+                         startAngle: .degrees(90), delta: .degrees(180))    // → (leftC, top)
+        p.addLine(to: CGPoint(x: cx - gx, y: top))
+        return p
     }
 }
 
 // MARK: - Seat Position Math
 
+/// Seats ride a racetrack just outside the rail. The ring is the rail expanded *anisotropically* —
+/// only a hair on the sides (the end caps already sit near the screen edge) and more on the flat
+/// top/bottom — so seats lift cleanly off the rail without the side seats clipping off-screen.
+/// Seats are spread evenly by arc length over the perimeter minus a dealer gap centered at the top.
 func seatPosition(index: Int, total: Int, cx: CGFloat, cy: CGFloat, rx: CGFloat, ry: CGFloat) -> CGPoint {
-    let dealerGap: Double = 75
-    let startDeg: Double = 90 - dealerGap / 2
-    let arcDeg: Double = 360 - dealerGap
-    let step = total <= 1 ? 0.0 : arcDeg / Double(total - 1)
-    let deg = startDeg - Double(index) * step
-    let rad = deg * .pi / 180
-    return CGPoint(
-        x: cx + rx * 1.04 * cos(rad),   // tightened from 1.15 so edge seats' pills clear the screen
-        y: cy - ry * 1.15 * sin(rad)
-    )
+    let srx = rx + rx * 0.03           // side clearance — small; caps are tight to the screen edge
+    let sry = ry + rx * 0.13           // top/bottom lift off the rail
+    let r   = sry                      // stadium corner radius
+    let a   = max(0, srx - sry)        // half-length of each flat straight
+    let arc = CGFloat.pi * r           // length of one semicircular cap
+    let perim = 4 * a + 2 * arc
+
+    // Wide enough that the two top seats clear the dealer station and land on the rounded ends —
+    // nobody sits where the dealer is, like a real table.
+    let gapHalf: CGFloat = 0.115       // half the dealer gap, as a fraction of perimeter
+    let usable  = 1 - 2 * gapHalf
+    let f = total <= 1 ? 0.5 : gapHalf + usable * CGFloat(index) / CGFloat(total - 1)
+    let d = f * perim                  // arc length, clockwise from top-center
+
+    // Segments clockwise from top-center: topR(a) → rightCap(arc) → bottom(2a) → leftCap(arc) → topL(a)
+    let x: CGFloat, y: CGFloat
+    if d < a {                                         // top straight, center → right corner
+        x = cx + d;                 y = cy - r
+    } else if d < a + arc {                            // right cap, top → bottom
+        let ang = -CGFloat.pi / 2 + (d - a) / r
+        x = cx + a + r * cos(ang);  y = cy + r * sin(ang)
+    } else if d < 3 * a + arc {                        // bottom straight, right → left
+        x = cx + a - (d - a - arc); y = cy + r
+    } else if d < 3 * a + 2 * arc {                    // left cap, bottom → top
+        let ang = CGFloat.pi / 2 + (d - 3 * a - arc) / r
+        x = cx - a + r * cos(ang);  y = cy + r * sin(ang)
+    } else {                                           // top straight, left corner → center
+        x = cx - a + (d - 3 * a - 2 * arc); y = cy - r
+    }
+    return CGPoint(x: x, y: y)
 }
 

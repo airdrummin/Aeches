@@ -77,7 +77,7 @@ History, Marketplace, and Profile are placeholder stubs. Record is fully impleme
 The hand entry screen is a single persistent view split into two independently operating halves. The screen never navigates away during a hand — everything happens in place.
 
 **Top half — Table**
-A geometric oval poker table with gold leather rail, felt surface, and numbered seat buttons. Used to set the dealer button, record seat actions, and view action states. The table stays visible at all times.
+A racetrack (stadium-shaped) poker table with gold leather rail, felt surface, and numbered seat buttons — real casino proportions (flat long sides, rounded ends). Used to set the dealer button, record seat actions, and view action states. The table stays visible at all times.
 
 **Bottom half — Cards**
 A persistent strip showing all 7 card slots at once:
@@ -132,6 +132,7 @@ Both halves operate independently. The user can fill in cards before recording a
 
 ### Table Design
 
+- Racetrack / stadium silhouette (the `Racetrack` shape: flat top & bottom, semicircular ends) at ~1.8:1 — real casino proportions, never an ellipse. Every layer (rail, felt, pinstripe, stitching, shadows) is framed from this one shape.
 - Gold leather rail with a gap at 12 o'clock for the house dealer station
 - **DEALER** label centered in the gap
 - Green felt surface with radial gradient, brass pinstripe, and stitching ring
@@ -327,7 +328,7 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 
 ### Implemented
 - Full hand recording engine — `HandEntryView.swift`
-- Geometric table oval with gold rail, felt, gap at dealer station, 6/8/9/10-seat support
+- Racetrack (stadium) table — real casino proportions (~1.8:1, flat sides + rounded ends) via the `Racetrack` shape; gold rail, felt, gap at dealer station, 6/8/9/10-seat support; seats ride the rail
 - Session-locked hero seat, per-hand dealer button placement
 - Empty seats — an **Edit Seats** toggle at place-button marks seats with no player (dashed empty rings); the hand plays and labels positions as a shorter-handed game (occupied seats only). Persists across hands as table composition; hero's seat protected, ≥2 seats kept (see Empty Seats)
 - Position labels anchored both ends — UTG always first-to-act, LJ/HJ/CO button-relative, MP/MP+1 the middle filler (6→10-handed); computed over occupied seats so empties renumber the ring
