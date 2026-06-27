@@ -395,10 +395,10 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 - **Platform:** iOS only, SwiftUI
 - **Language:** Swift
 - **Bundle ID:** com.airdrummin.Aeches
-- **Architecture:** All hand recording state is local to `HandEntryView` and its child components. No `@EnvironmentObject` or observable context layer.
+- **Architecture:** Recording *interaction* state (the live ring, cue, picker, sizing strip, etc.) stays local to `HandEntryView` and its child components. Persisted hand *data* lives in one observable context layer — `SessionStore` (`ObservableObject`), injected app-wide via `@EnvironmentObject` and backed by the `HandStore` protocol. `HandEntryView` writes a closed hand through `store.saveHand(_:in:)` (upsert by `Hand.id`); History and Replay read the same store. (This reverses the original "no `@EnvironmentObject` / observable context layer" rule, which predated persistence — History must read the same hands Record writes.)
 - **Offline-first:** All recording works without network. Sync is background/silent.
 - **In-app purchases:** App Store IAP for subscriptions and à la carte purchases
-- **Storage:** Cloud sync for hand histories (provider TBD — likely Firebase or CloudKit). In-memory only during development.
+- **Storage:** Hands persist locally as Codable JSON behind the `HandStore` protocol (`FileHandStore` → `Application Support/aeches-store.json`, atomic + debounced, carrying a `storeVersion`). The protocol is the cloud seam: a future `CloudHandStore` swaps in with no consumer change (provider TBD — likely Firebase or CloudKit). See `Persistence/HandStore.swift` + `Persistence/SessionStore.swift`.
 - **Privacy:** Standard user hand histories are always private. Pro content visible to paying subscribers only.
 
 ### Known Limitations / Future Cleanup
@@ -416,10 +416,12 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 | `Aeches/HandEntryView.swift` | Full hand recording engine, two-row Control Bar (Undo · actions · Next Street), per-street card picker, shorthand transcript, all phase logic |
 | `Aeches/SeatSelectionView.swift` | Shared components only: `TableOvalView`, `SeatButtonView`, `SeatState`, `seatPosition()` |
 | `Aeches/Models.swift` | All data models and enums. `calculatePositions()` + `positionLabels(for:)` are the single source of truth for position labels (the only thing here intended to change — and only the label convention). Otherwise treat as stable. |
-| `Aeches/ContentView.swift` | Tab bar, `RecordTab`, design tokens (`Color` extensions) |
+| `Aeches/ContentView.swift` | Tab bar, `RecordTab` (resolves the active session through the store), design tokens (`Color` extensions) |
 | `Aeches/NewSessionView.swift` | Session creation screen |
 | `Aeches/LoginView.swift` | Auth screen |
-| `Aeches/AechesApp.swift` | App entry point, auth gate |
+| `Aeches/AechesApp.swift` | App entry point, auth gate, owns + injects `SessionStore`, flushes on background |
+| `Aeches/Persistence/SessionStore.swift` | `ObservableObject` single source of truth — session/hand CRUD (`upsertSession`, `saveHand` upsert-by-id, `allHands`, `hand(id:)`) over an injected `HandStore` |
+| `Aeches/Persistence/HandStore.swift` | The cloud seam: `HandStore` protocol + `FileHandStore` (atomic, debounced JSON) + `InMemoryHandStore` |
 
 ---
 

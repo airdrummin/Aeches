@@ -45,39 +45,50 @@ struct ContentView: View {
 // MARK: - Tab Placeholders
 
 struct RecordTab: View {
-    #if DEBUG
-    @State private var activeSession: Session? = Session(
-        type: .cash,
-        name: "Dev Session",
-        date: Date(),
-        tableSize: 9,
-        heroSeatIndex: 0,
-        stakes: "2/5"
-    )
-    #else
+    @EnvironmentObject private var store: SessionStore
     @State private var activeSession: Session? = nil
-    #endif
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.appBackground.ignoresSafeArea()
 
-                if activeSession == nil {
-                    NewSessionView(
-                        onSessionCreated: { session in activeSession = session },
-                        onBack: nil
+                if let session = activeSession {
+                    HandEntryView(
+                        session: session,
+                        onBack: { activeSession = nil }
                     )
                 } else {
-                    HandEntryView(
-                        session: activeSession!,
-                        onBack: { activeSession = nil }
+                    NewSessionView(
+                        onSessionCreated: { session in
+                            store.upsertSession(session)   // persist before recording into it
+                            activeSession = session
+                        },
+                        onBack: nil
                     )
                 }
             }
             .navigationBarHidden(true)
         }
+        #if DEBUG
+        // Dev convenience: boot straight into recording on a single, stable session (fixed id) so
+        // hands accumulate and persist across relaunch instead of spawning a fresh session each launch.
+        .onAppear {
+            guard activeSession == nil else { return }
+            let dev = store.session(id: Self.devSessionID) ?? Self.makeDevSession()
+            store.upsertSession(dev)
+            activeSession = dev
+        }
+        #endif
     }
+
+    #if DEBUG
+    private static let devSessionID = UUID(uuidString: "00000000-0000-0000-0000-0000000000DE")!
+    private static func makeDevSession() -> Session {
+        Session(id: devSessionID, type: .cash, name: "Dev Session", date: Date(),
+                tableSize: 9, heroSeatIndex: 0, stakes: "2/5")
+    }
+    #endif
 }
 
 struct HistoryTab: View {
@@ -153,4 +164,5 @@ extension Color {
 
 #Preview {
     ContentView()
+        .environmentObject(SessionStore(backing: InMemoryHandStore()))
 }

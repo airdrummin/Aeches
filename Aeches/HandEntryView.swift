@@ -20,6 +20,18 @@ struct HandEntryView: View {
     let session: Session
     var onBack: () -> Void
 
+    /// The app-wide persisted source of truth. Closed hands are written here (upsert by id); nothing
+    /// reads live `@State` to render a saved hand.
+    @EnvironmentObject private var store: SessionStore
+
+    /// The in-progress hand's durable identity. Stable across re-close (Undo→re-close) and post-close
+    /// card edits, so `store.saveHand` updates one record instead of duplicating. Regenerated only when
+    /// a NEW hand begins (`resetHandState`), never on Undo-reopen.
+    @State private var currentHandID = UUID()
+    /// The closed hand's outcome, set at each close — lets post-close edits rebuild via `buildHand`
+    /// without reading a saved-hand array. Reset in `resetHandState`.
+    @State private var currentOutcome: Outcome? = nil
+
     // Hero seat — locked for the session
     @State private var heroSeat: Int? = nil
     @State private var tableSize: Int
@@ -44,7 +56,6 @@ struct HandEntryView: View {
     @State private var activeSeatSequence: [Int] = []
     @State private var foldedSeats: Set<Int> = []
     @State private var highlightedSeat: Int? = nil
-    @State private var savedHands: [Hand] = []
 
     /// True only when a decisive input (swipe / action button) on the last actor completed the
     /// betting round, so the ring is held on that seat awaiting a Next Street tap. In this state the
@@ -1097,8 +1108,11 @@ struct HandEntryView: View {
 
         // A finished hand is reversible. Un-close it first, discriminating by the saved hand's
         // outcome (showdown saves a non-nil outcome; a fold-out saves nil; a skip sets the flag).
+        // We read the saved snapshot from the store rather than removing it — the persisted copy stays
+        // put (overwritten on re-close), so an Undo-then-quit keeps the last-closed hand. The live
+        // `@State` below is what reopens for editing.
         if phase == .handClosed {
-            let popped = savedHands.popLast()
+            let closed = store.hand(id: currentHandID)
             handCloseSummary = ""
             if lastHandWasSkipped {
                 // Skip undo: all hand state is still live (skipHand never called resetHandState) and
@@ -1110,7 +1124,7 @@ struct HandEntryView: View {
                 highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
                 return
             }
-            if popped?.outcome != nil {
+            if closed?.outcome != nil {
                 phase = .showdown        // re-open the Win/Lose/Chop overlay to re-pick — no peel
                 highlightedSeat = nil
                 return
@@ -1118,7 +1132,7 @@ struct HandEntryView: View {
             // Hero-folded villain showdown: closed with no Win/Lose/Chop, and the action log is intact
             // (the close was the Showdown button, not an erroneous fold). Reopen recording at the last
             // actor — no peel. A genuine fold-out leaves exactly one seat and falls through to the peel.
-            if (popped?.showdownSeatIndices.count ?? 0) >= 2 {
+            if (closed?.showdownSeatIndices.count ?? 0) >= 2 {
                 phase = .recordingHand
                 highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
                 return
@@ -1474,13 +1488,10 @@ struct HandEntryView: View {
     /// groups; the flat `holeCards`/`villainCards`/`board` on `Hand` are computed from these, so there
     /// is nothing else to collapse. A board group is stored only once it has a rank (else nil).
     private func syncClosedHandCards() {
-        guard phase == .handClosed, !savedHands.isEmpty else { return }
-        let i = savedHands.count - 1
-        savedHands[i].holeGroup     = holeGroup
-        savedHands[i].villainGroups = villainGroups
-        savedHands[i].flopGroup     = flopGroup.hasAnyRank  ? flopGroup  : nil
-        savedHands[i].turnGroup     = turnGroup.hasAnyRank  ? turnGroup  : nil
-        savedHands[i].riverGroup    = riverGroup.hasAnyRank ? riverGroup : nil
+        guard phase == .handClosed else { return }
+        // Rebuild from live state and upsert — `buildHand` already reads the current card groups, so a
+        // post-close edit is just another save of the same `currentHandID` (no field-by-field patch).
+        store.saveHand(buildHand(outcome: currentOutcome), in: session.id)
     }
 
     // MARK: - Card Strip
@@ -2647,7 +2658,7 @@ struct HandEntryView: View {
         }
 
         // Showdown result line (fold-out has no tag — the final fold ends it).
-        if phase == .handClosed, let outcome = savedHands.last?.outcome {
+        if phase == .handClosed, let outcome = currentOutcome {
             switch outcome {
             case .win:  lines.append("Hero wins.")
             case .lose: lines.append("Hero loses.")
@@ -2736,6 +2747,8 @@ struct HandEntryView: View {
     /// Clears all per-hand state (actions, streets, cards) while preserving the session-locked hero
     /// seat and table size. Does NOT set `phase` — the caller decides the next phase.
     private func resetHandState() {
+        currentHandID = UUID()     // a new hand gets a fresh durable identity (Undo-reopen keeps its own)
+        currentOutcome = nil
         buttonSeat = nil
         holeGroup  = CardGroup(capacity: 2)
         flopGroup  = CardGroup(capacity: 3)
@@ -2770,6 +2783,7 @@ struct HandEntryView: View {
             streetsToSave.append(Street(name: currentStreet, actions: actionsThisStreet))
         }
         return Hand(
+            id: currentHandID,                  // stable across re-close + post-close edits (upsert key)
             sessionId: session.id,
             handNumber: handNumber,
             title: nil,
@@ -2795,8 +2809,11 @@ struct HandEntryView: View {
         )
     }
 
+    /// Persist the current hand at close. Single write path: records the outcome (so post-close edits
+    /// can rebuild) and upserts by `currentHandID` — re-closing after Undo updates the same record.
     private func saveCurrentHand(outcome: Outcome?) {
-        savedHands.append(buildHand(outcome: outcome))
+        currentOutcome = outcome
+        store.saveHand(buildHand(outcome: outcome), in: session.id)
     }
 
     /// Deals the next hand from the hand-closed state: place the dealer button on the tapped seat,
@@ -3426,6 +3443,7 @@ struct CardFrameView: View {
         session: Session(type: .cash, name: "Bellagio 2/5", date: Date(), tableSize: 9, heroSeatIndex: 0),
         onBack: {}
     )
+    .environmentObject(SessionStore(backing: InMemoryHandStore()))
 }
 
 // MARK: - Showdown Overlay
