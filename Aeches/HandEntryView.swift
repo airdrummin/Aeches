@@ -65,7 +65,8 @@ struct HandEntryView: View {
     @State private var turnGroup  = CardGroup(capacity: 1)
     @State private var riverGroup = CardGroup(capacity: 1)
     // Villain hole groups, keyed by seat — entered in the card strip at showdown/close (the seats still
-    // in the hand). Per-hand; cleared on reset. Collapses to `Hand.villainCards` on save.
+    // in the hand). Per-hand; cleared on reset. Saved verbatim to `Hand.villainGroups` (lossless);
+    // `Hand.villainCards` is the computed flat-card view of them.
     @State private var villainGroups: [Int: CardGroup] = [:]
 
     // Card picker state. `entryTarget` is the open group (nil = picker closed): a hero street or a
@@ -1117,7 +1118,7 @@ struct HandEntryView: View {
             // Hero-folded villain showdown: closed with no Win/Lose/Chop, and the action log is intact
             // (the close was the Showdown button, not an erroneous fold). Reopen recording at the last
             // actor — no peel. A genuine fold-out leaves exactly one seat and falls through to the peel.
-            if (popped?.activeSeatIndices.count ?? 0) >= 2 {
+            if (popped?.showdownSeatIndices.count ?? 0) >= 2 {
                 phase = .recordingHand
                 highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
                 return
@@ -1363,7 +1364,7 @@ struct HandEntryView: View {
     }
 
     private func closeStreet() {
-        streets.append(Street(name: currentStreet, boardCards: [], actions: actionsThisStreet))
+        streets.append(Street(name: currentStreet, actions: actionsThisStreet))
         actionsThisStreet = []
         if let next = currentStreet.next() {
             currentStreet = next
@@ -1467,48 +1468,19 @@ struct HandEntryView: View {
         )[seat] ?? "?"
     }
 
-    private func suitKey(_ symbol: String) -> String {
-        switch symbol {
-        case "♠": return "s"
-        case "♥": return "h"
-        case "♦": return "d"
-        case "♣": return "c"
-        default:  return ""
-        }
-    }
-
-    /// Hero hole cards for the saved Hand. Reads the bound per-frame suit only — footnote/relationship
-    /// modes collapse to per-card here (the accepted, deferred persistence limitation; the live
-    /// transcript via `groupNotation` is the faithful artifact while recording).
-    private func buildHeroCards() -> [Card] {
-        holeGroup.frames.compactMap { frame in
-            guard let rankStr = frame.rank, let rank = Rank(rawValue: rankStr) else { return nil }
-            let suit = frame.suit.knownSymbol.flatMap { Suit(rawValue: suitKey($0)) }
-            return Card(rank: rank, suit: suit)
-        }
-    }
-
-    /// Villain shown cards for the saved Hand, keyed by seat — same per-card bound-only collapse as
-    /// `buildHeroCards` (footnote/relationship modes are faithful only in the live transcript).
-    private func buildVillainCards() -> [Int: [Card]] {
-        var result: [Int: [Card]] = [:]
-        for (seat, g) in villainGroups {
-            let cards: [Card] = g.frames.compactMap { frame in
-                guard let rankStr = frame.rank, let rank = Rank(rawValue: rankStr) else { return nil }
-                let suit = frame.suit.knownSymbol.flatMap { Suit(rawValue: suitKey($0)) }
-                return Card(rank: rank, suit: suit)
-            }
-            if !cards.isEmpty { result[seat] = cards }
-        }
-        return result
-    }
-
-    /// Villain (and hero) cards are entered *after* the hand is saved at close, so re-sync them onto the
-    /// stored Hand whenever a card group is dismissed while closed — keeping the saved record current.
+    /// Cards are entered *after* the hand is saved at close (villain showdown cards, a hero hole fix, a
+    /// board correction), so re-sync the canonical groups onto the stored Hand whenever a card group is
+    /// dismissed while closed — keeping the saved record faithful. Writes hole, villain, AND board
+    /// groups; the flat `holeCards`/`villainCards`/`board` on `Hand` are computed from these, so there
+    /// is nothing else to collapse. A board group is stored only once it has a rank (else nil).
     private func syncClosedHandCards() {
         guard phase == .handClosed, !savedHands.isEmpty else { return }
-        savedHands[savedHands.count - 1].holeCards = buildHeroCards()
-        savedHands[savedHands.count - 1].villainCards = buildVillainCards()
+        let i = savedHands.count - 1
+        savedHands[i].holeGroup     = holeGroup
+        savedHands[i].villainGroups = villainGroups
+        savedHands[i].flopGroup     = flopGroup.hasAnyRank  ? flopGroup  : nil
+        savedHands[i].turnGroup     = turnGroup.hasAnyRank  ? turnGroup  : nil
+        savedHands[i].riverGroup    = riverGroup.hasAnyRank ? riverGroup : nil
     }
 
     // MARK: - Card Strip
@@ -1591,8 +1563,8 @@ struct HandEntryView: View {
     /// The frame to draw on a face: the real frame, or — for a uniform footnote — a copy with the
     /// derived suit injected so the face renders a colored pip like a bound card (no model mutation).
     private func faceFrame(_ frame: CardFrame, footnoteSuit: String?) -> CardFrame {
-        guard let s = footnoteSuit else { return frame }
-        var f = frame; f.suit = .known(s); return f
+        guard let s = footnoteSuit, let suit = Suit(symbol: s) else { return frame }
+        var f = frame; f.suit = .known(suit); return f
     }
 
     /// A partial footnote's suits as glyphs for the card bottom (Option D, repeated on each card):
@@ -1838,7 +1810,7 @@ struct HandEntryView: View {
         for (target, g) in groups {
             for (i, f) in g.frames.enumerated() {
                 if target == exclude, i == index { continue }
-                if let r = f.rank, let sym = f.suit.knownSymbol { keys.insert(r + suitLetter(sym)) }
+                if let r = f.rank, let s = f.suit.knownSuit { keys.insert(r.rawValue + s.rawValue) }
             }
         }
         return keys
@@ -1851,7 +1823,7 @@ struct HandEntryView: View {
         guard let g = entryGroup else { return false }
         let willBind = g.mode == .bound || (g.mode == .none && (g.capacity == 1 || g.firstEmptyIndex != nil))
         guard willBind, focusIndex < g.frames.count, let rank = g.frames[focusIndex].rank else { return false }
-        return usedCardKeys(excluding: entryTarget, index: focusIndex).contains(rank + suitLetter(suit))
+        return usedCardKeys(excluding: entryTarget, index: focusIndex).contains(rank.rawValue + suitLetter(suit))
     }
 
     // Docked below the strip (not a covering sheet). The strip slots are the frames — they stay
@@ -2469,15 +2441,15 @@ struct HandEntryView: View {
     /// and parks the cursor there — the cursor is always "the card you just typed," so a following suit
     /// binds to it.
     private func rankTapped(_ r: String) {
-        guard var g = entryGroup else { return }
+        guard var g = entryGroup, let rank = Rank(rawValue: r) else { return }
         entryLocked = false             // typing a rank begins fresh entry, releasing the re-open lock
         if g.isFull {
             g.reset()
-            g.frames[0].rank = r
+            g.frames[0].rank = rank
             focusIndex = 0
         } else {
             let i = g.firstEmptyIndex ?? 0
-            g.frames[i].rank = r
+            g.frames[i].rank = rank
             focusIndex = i
         }
         setEntryGroup(g)
@@ -2509,11 +2481,12 @@ struct HandEntryView: View {
                     let idx = cycle.firstIndex(of: g.suitRun) ?? 0
                     g.suitRun = cycle[(idx + 1) % cycle.count]
                 } else {
-                    g.frames[0].suit = .known(sym)
+                    g.frames[0].suit = Suit(symbol: sym).map(FrameSuit.known) ?? .unknown
                     g.suitRun = 1
                 }
             } else {
-                g.frames[focusIndex].suit = symbol.map(FrameSuit.known) ?? .unknown   // x → explicit unknown
+                // x (nil symbol) → explicit unknown; a real glyph → the typed bound suit.
+                g.frames[focusIndex].suit = symbol.flatMap { Suit(symbol: $0) }.map(FrameSuit.known) ?? .unknown
                 if g.capacity == 1 { g.suitRun = 1 }   // x / reset on a single card
             }
         case .footnote:
@@ -2574,7 +2547,7 @@ struct HandEntryView: View {
 
     /// Notation for an explicit group (used for villain hole groups as well as the hero streets).
     private func groupNotation(_ g: CardGroup) -> String {
-        let ranks = g.frames.compactMap { $0.rank }
+        let ranks = g.frames.compactMap { $0.rank?.rawValue }
         guard !ranks.isEmpty else { return "" }
         let rankStr = ranks.joined()
 
@@ -2591,11 +2564,12 @@ struct HandEntryView: View {
             let anyKnown = g.frames.contains { $0.suit.knownSymbol != nil }
             let markUnknown = anyKnown && g.capacity > 1
             return g.frames.compactMap { f -> String? in
-                guard let r = f.rank else { return nil }
+                guard let r = f.rank?.rawValue else { return nil }
                 switch f.suit {
                 // The suit letter repeats by suitRun — the turn/river board count (4h / 4hh / 4hhh).
                 // suitRun is 1 everywhere except a multiplied turn/river card, so hole/flop are unchanged.
-                case .known(let s): return r + String(repeating: suitLetter(s), count: g.suitRun)
+                // `s` is a typed `Suit` now, so its rawValue IS the suit letter — no glyph conversion.
+                case .known(let s): return r + String(repeating: s.rawValue, count: g.suitRun)
                 case .unknown:      return r + "x"
                 case .unspecified:  return markUnknown ? r + "x" : r
                 }
@@ -2793,7 +2767,7 @@ struct HandEntryView: View {
     private func buildHand(outcome: Outcome?) -> Hand {
         var streetsToSave = streets
         if !actionsThisStreet.isEmpty {
-            streetsToSave.append(Street(name: currentStreet, boardCards: [], actions: actionsThisStreet))
+            streetsToSave.append(Street(name: currentStreet, actions: actionsThisStreet))
         }
         return Hand(
             sessionId: session.id,
@@ -2801,9 +2775,17 @@ struct HandEntryView: View {
             title: nil,
             heroSeatIndex: heroSeat ?? 0,
             buttonSeatIndex: buttonSeat ?? 0,
-            activeSeatIndices: activeSeatSequence,
-            holeCards: buildHeroCards(),
-            villainCards: buildVillainCards(),
+            // Positions are computed over OCCUPIED seats (empties excluded), stable across folds —
+            // this is the set `calculatePositions` expects, fixing the old activeSeatSequence drift.
+            tableSize: tableSize,
+            occupiedSeatIndices: occupiedSeats,
+            // Canonical, lossless card groups. A board street is stored only once it has a rank; the
+            // flat holeCards/villainCards/board on Hand are computed from these.
+            holeGroup: holeGroup,
+            flopGroup:  flopGroup.hasAnyRank  ? flopGroup  : nil,
+            turnGroup:  turnGroup.hasAnyRank  ? turnGroup  : nil,
+            riverGroup: riverGroup.hasAnyRank ? riverGroup : nil,
+            villainGroups: villainGroups,
             streets: streetsToSave,
             outcome: outcome,
             potSize: nil,
@@ -3282,50 +3264,8 @@ private struct ControlBar: View {
 
 /// A bound card's suit as a three-state value, so an *explicit* unknown (`x`, deliberately entered)
 /// is distinct from a frame that simply hasn't been suited yet. Used only while the group is `.bound`.
-enum FrameSuit: Equatable {
-    case unspecified            // nothing entered yet (blank)
-    case unknown                // explicit "x" — always shows/reads as x, even alone (Jx, Qx)
-    case known(String)          // "♠" "♥" "♦" "♣"
-
-    /// The suit symbol when a real suit is set, else nil (both `.unspecified` and `.unknown`).
-    var knownSymbol: String? { if case .known(let s) = self { return s } else { return nil } }
-}
-
-/// One card frame: a rank, plus a bound suit that is only meaningful while the group is `.bound`.
-struct CardFrame: Equatable {
-    var rank: String? = nil          // "A","K",…,"2"
-    var suit: FrameSuit = .unspecified
-    var isEmpty: Bool { rank == nil }
-}
-
-/// A street's group of frames plus its single suit mode. Hole = 2 frames, flop = 3, turn/river = 1.
-/// The mode determines how suit info is stored and rendered (see `groupNotation`):
-/// - `.bound`        per-frame suit (interleaved entry) — `AdJx`
-/// - `.footnote`     an unassigned trailing note of suit letters — `AJdx`
-/// - `.relationship` an abstract relationship/texture from a shortcut button — `AJs` / `Q53tt`
-struct CardGroup: Equatable {
-    enum SuitMode: Equatable { case none, bound, footnote, relationship }
-
-    var frames: [CardFrame]
-    var mode: SuitMode = .none
-    var footnote: [String] = []      // ordered suit letters ("s/h/d/c" or "x"); used only in .footnote
-    var footnoteCursor: Int = 0      // wrap-replace pointer once the footnote is full
-    var relationship: String? = nil  // "s","o" (hole) | "r","m","tt" (flop); used only in .relationship
-    var suitRun: Int = 1             // turn/river only: count of this card's suit on the board (4h=1, 4hhh=3)
-
-    var capacity: Int { frames.count }
-    var ranksFilled: Int { frames.filter { $0.rank != nil }.count }
-    var isFull: Bool { ranksFilled == capacity }
-    var hasAnyRank: Bool { ranksFilled > 0 }
-    var firstEmptyIndex: Int? { frames.firstIndex(where: { $0.isEmpty }) }
-
-    init(capacity: Int) { self.frames = Array(repeating: CardFrame(), count: capacity) }
-
-    mutating func reset() {
-        frames = Array(repeating: CardFrame(), count: capacity)
-        mode = .none; footnote = []; footnoteCursor = 0; relationship = nil; suitRun = 1
-    }
-}
+// `FrameSuit`, `CardFrame`, and `CardGroup` now live in `Models.swift` (they are part of the persisted,
+// lossless card model — see "Card Entry Model" there). The view only mutates and renders them.
 
 // MARK: - Suit Pips — N copies of a suit glyph in a dice-like layout (board count on turn/river)
 
@@ -3432,7 +3372,7 @@ struct CardFrameView: View {
                     .foregroundStyle(Color.borderDark)
             } else {
                 VStack(spacing: 0) {
-                    Text(frame.rank ?? "")
+                    Text(frame.rank?.rawValue ?? "")
                         .font(.system(size: 16, weight: .black))
                         .foregroundStyle(rankColor)
                     // Per-card suit pip: only in bound / uniform-footnote (showBoundSuit). Footnote-partial

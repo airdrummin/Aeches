@@ -403,9 +403,9 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 
 ### Known Limitations / Future Cleanup
 - **`isAutoFolded` naming.** The `isAutoFolded: Bool` flag on `Action` is the batch-rewind marker for *all* system-generated actions — preflop auto-folds (`preflopJump`) and post-flop auto-checks (`postflopJump`). The name is misleading for the check case; rename to `isAutoAction` in a future pass.
-- **Two position-label paths diverge as players fold.** Table display labels (`seatPositions`) are computed over all seats (`Array(0..<tableSize)`), while labels frozen onto `Action` records (`positionFor(seat:)`) use `activeSeatSequence` (active only). These drift apart once seats fold; reconcile in a future pass.
+- **Two position-label paths diverge as players fold.** Table display labels (`seatPositions`) are computed over all seats (`Array(0..<tableSize)`), while labels frozen onto `Action` records (`positionFor(seat:)`) use `activeSeatSequence` (active only). These drift apart once seats fold; reconcile in a future pass. *(The saved-hand half of this is fixed: `Hand.occupiedSeatIndices` now stores the occupied set, so positions computed from a saved hand are correct with folded seats present.)*
 - **Seat gestures are deliberately one `DragGesture`.** Tap and swipe are classified inside a single `DragGesture(minimumDistance: 0)` in `SeatSelectionView.swift` — do **not** split them into `.onTapGesture` + `.simultaneousGesture` + `.highPriorityGesture`. SwiftUI's arbitration between layered recognizers is fragile (iOS 18 worsens it) and a shared mute-flag gets stuck. See the comment on that gesture for the full rationale. (Sizing is no longer a seat gesture — it lives on the Raise/Bet control-bar buttons, which use the same single-`DragGesture` tap-vs-hold pattern; see `SizingOverhaul.md`.)
-- **Card entry is lossy on save.** The live `CardGroup`/`CardFrame` suit modes (bound/footnote/relationship, explicit `x`) are the faithful artifact only *while recording* — the shorthand transcript renders them in full. On save, `buildHeroCards()` / `buildVillainCards()` collapse to per-card `Card.suit` (so footnote/relationship distinctions are lost), and board cards (flop/turn/river groups) are not persisted at all. Hero and villain cards entered *after* close re-sync onto the saved hand (`syncClosedHandCards()`); board cards still don't. Reconcile when cloud sync / the History screen lands.
+- ~~**Card entry is lossy on save.**~~ *Retired in the History feature, Phase 1.* The `CardGroup`/`CardFrame`/`FrameSuit` model now lives in `Models.swift`, is `Codable`, and is stored verbatim on `Hand` (`holeGroup`, `flop/turn/riverGroup`, `villainGroups`) — bound/footnote/relationship suit modes, explicit `x`, and board-suit counts all survive. Board cards persist; `syncClosedHandCards()` re-syncs hero, villain, **and board** groups after close. The flat `Hand.holeCards`/`villainCards`/`board` are now lossy *derivations* (`asCards`), not the stored truth.
 
 ---
 
@@ -495,11 +495,12 @@ sizing:     RaiseSizing?  // sized .open/.raise, or a .call marked All-in; nil o
 
 ### Street
 ```
-id:         UUID
-name:       StreetName
-boardCards: [Card]        // empty for preflop, 3 for flop, 1 for turn/river
-actions:    [Action]
+id:      UUID
+name:    StreetName
+actions: [Action]
 ```
+Board cards are **not** stored on `Street` — they live on the hand's canonical card groups
+(`flopGroup`/`turnGroup`/`riverGroup`), the single source of truth. Derive `Hand.board` from those.
 
 ### Villain
 ```
@@ -513,23 +514,43 @@ isActive:    Bool         // false = busted out or left the table
 
 ### Hand
 ```
-id:               UUID
-sessionId:        UUID
-handNumber:       Int
-title:            String?
-timestamp:        Date
-heroSeatIndex:    Int
-buttonSeatIndex:  Int
-activeSeatIndices: [Int]  // occupied seats this hand — drives position label calculation
-holeCards:        [Card]  // hero's hole cards, 0–2
-villainCards:     [Int: [Card]] // seatIndex → that villain's shown cards (0–2); showdown only
-streets:          [Street] // only streets that were played
-outcome:          Outcome? // nil if hand abandoned or outcome not recorded
-potSize:          Double?
-potUnit:          PotUnit?
-effectiveStack:   Double?  // optional — the hand entry UI records this in big blinds (shortest stack by the flop)
-commentary:       String?
+id:                 UUID
+sessionId:          UUID
+handNumber:         Int
+title:              String?
+timestamp:          Date
+heroSeatIndex:      Int
+buttonSeatIndex:    Int
+
+// table composition — drives position labels + replay table shape
+tableSize:           Int
+occupiedSeatIndices: [Int]   // seats with a player this hand (empties excluded)
+
+// canonical, lossless card storage (the CardGroup is the faithful artifact)
+holeGroup:     CardGroup
+flopGroup:     CardGroup?      // nil until that street was entered
+turnGroup:     CardGroup?
+riverGroup:    CardGroup?
+villainGroups: [Int: CardGroup] // seatIndex → that villain's shown cards; showdown only
+
+streets:        [Street]   // only streets that were played (actions only — no board)
+outcome:        Outcome?   // nil if hand abandoned or outcome not recorded
+potSize:        Double?
+potUnit:        PotUnit?
+effectiveStack: Double?     // optional — recorded in big blinds (shortest stack by the flop)
+commentary:     String?
+
+// derived (computed, not stored) — flat [Card] views for simple consumers
+holeCards:           [Card]        // = holeGroup.asCards
+villainCards:        [Int: [Card]] // = villainGroups.mapValues { $0.asCards }
+board:               [Card]        // flop + turn + river groups, collapsed
+showdownSeatIndices: [Int]         // still-in seats at the end, hero excluded — derived from the fold log
 ```
+
+`CardGroup` / `CardFrame` / `FrameSuit` are the lossless card-entry model (in `Models.swift`): a
+per-street group of frames carrying one suit mode (bound / footnote / relationship), explicit `x`, and
+turn/river board-suit counts. `CardFrame.rank` is a `Rank`; a bound suit (`FrameSuit.known`) is a `Suit`.
+The flat `[Card]` views above are a lossy convenience (`asCards`) — the group is the source of truth.
 
 ### Session
 ```

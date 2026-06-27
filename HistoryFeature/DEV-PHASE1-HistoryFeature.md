@@ -1,6 +1,6 @@
 # Phase 1 — Lossless `Hand` (canonical card model)
 
-**Status:** ⬜ Not started · **Depends on:** nothing · **Unblocks:** all phases
+**Status:** ✅ Done (code landed; round-trip verified) · **Depends on:** nothing · **Unblocks:** all phases
 
 ## Goal
 

@@ -16,6 +16,18 @@ enum Suit: String, Codable, CaseIterable {
         case .clubs:    return "♣"
         }
     }
+
+    /// Reverse of `symbol` — build a Suit from a glyph the picker UI passes around (`"♠"` → `.spades`).
+    /// Returns nil for anything that isn't a real suit glyph (e.g. the explicit-unknown `x`).
+    init?(symbol: String) {
+        switch symbol {
+        case "♠": self = .spades
+        case "♥": self = .hearts
+        case "♦": self = .diamonds
+        case "♣": self = .clubs
+        default:  return nil
+        }
+    }
 }
 
 enum Rank: String, Codable, CaseIterable {
@@ -113,10 +125,11 @@ struct Action: Identifiable, Codable {
 }
 
 struct Street: Identifiable, Codable {
-    var id:         UUID       = UUID()
-    var name:       StreetName
-    var boardCards: [Card]     // empty for preflop; 3 for flop; 1 for turn/river
-    var actions:    [Action]   = []
+    var id:      UUID       = UUID()
+    var name:    StreetName
+    var actions: [Action]   = []
+    // Board cards are NOT stored here. They live on the hand's canonical card groups
+    // (`flopGroup`/`turnGroup`/`riverGroup`), the single source of truth; derive `Hand.board` from those.
 }
 
 struct Villain: Identifiable, Codable {
@@ -136,15 +149,41 @@ struct Hand: Identifiable, Codable {
     var timestamp:        Date     = Date()
     var heroSeatIndex:    Int
     var buttonSeatIndex:  Int
-    var activeSeatIndices: [Int]   // occupied seats this hand — drives position label calculation
-    var holeCards:        [Card]   = []   // hero's cards, 0–2
-    var villainCards:     [Int: [Card]] = [:]  // seatIndex → that villain's shown cards (0–2); showdown only
-    var streets:          [Street] = []   // only streets that were played
+
+    // Table composition — drives position labels. `occupiedSeatIndices` are the seats with a player
+    // this hand (empties excluded); positions are computed over these. `tableSize` lets a replayed
+    // hand reconstruct the physical table shape.
+    var tableSize:           Int
+    var occupiedSeatIndices: [Int]
+
+    // Canonical, lossless card storage. The `CardGroup` is the faithful artifact the transcript renders
+    // from (bound / footnote / relationship suit modes, explicit `x`, board-suit counts all survive).
+    // A board group is nil until that street was entered.
+    var holeGroup:     CardGroup
+    var flopGroup:     CardGroup?        = nil
+    var turnGroup:     CardGroup?        = nil
+    var riverGroup:    CardGroup?        = nil
+    var villainGroups: [Int: CardGroup]  = [:]   // seatIndex → that villain's shown cards; showdown only
+
+    var streets:          [Street] = []   // only streets that were played (actions only — no board)
     var outcome:          Outcome?
     var potSize:          Double?
     var potUnit:          PotUnit?
     var effectiveStack:   Double?         // optional, in same unit as potUnit
     var commentary:       String?
+
+    // MARK: Derived (computed, not stored) — keep the flat `[Card]` API for simple consumers.
+    var holeCards: [Card] { holeGroup.asCards }
+    var villainCards: [Int: [Card]] { villainGroups.mapValues { $0.asCards } }
+    var board: [Card] { [flopGroup, turnGroup, riverGroup].compactMap { $0 }.flatMap { $0.asCards } }
+
+    /// Seats still in the hand at the end, hero excluded (the showdown villains) — derived from the
+    /// fold log, never stored, so it can't drift from the actions. Folds across every street count.
+    var showdownSeatIndices: [Int] {
+        let folded = Set(streets.flatMap { $0.actions }
+            .filter { $0.actionType == .fold }.map { $0.seatIndex })
+        return occupiedSeatIndices.filter { $0 != heroSeatIndex && !folded.contains($0) }
+    }
 }
 
 struct Session: Identifiable, Codable {
@@ -208,5 +247,70 @@ private func positionLabels(for count: Int) -> [String] {
     case 9:  return ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "LJ", "HJ", "CO"]
     case 10: return ["BTN", "SB", "BB", "UTG", "UTG+1", "MP", "MP+1", "LJ", "HJ", "CO"]
     default: return (0..<count).map { "Seat \($0 + 1)" }
+    }
+}
+
+// MARK: - Card Entry Model (canonical, lossless)
+//
+// These types ARE the faithful card record — the live picker mutates them and the transcript renders
+// from them, and a saved `Hand` stores them verbatim (no flat-card collapse). They live here (not in
+// the view) so they are part of the persisted model. A rank is never fuzzy → `Rank`; a *known* suit is
+// never fuzzy → `Suit`. All the fuzziness (no suit yet, explicit `x`, footnote letters, relationship
+// texture) is carried by `FrameSuit` + the group's suit mode.
+
+/// One frame's suit state. `.known` is the only concrete suit (typed `Suit`); the rest is fuzziness.
+enum FrameSuit: Equatable, Codable {
+    case unspecified        // nothing entered yet (blank)
+    case unknown            // explicit "x" — always shows/reads as x, even alone (Jx, Qx)
+    case known(Suit)        // a real, bound suit
+
+    /// The bound `Suit` when one is set, else nil (both `.unspecified` and `.unknown`).
+    var knownSuit: Suit? { if case .known(let s) = self { return s } else { return nil } }
+    /// The suit glyph for the display layer, derived from `knownSuit` (keeps glyph-based UI unchanged).
+    var knownSymbol: String? { knownSuit?.symbol }
+}
+
+/// One card frame: a rank, plus a bound suit that is only meaningful while the group is `.bound`.
+struct CardFrame: Equatable, Codable {
+    var rank: Rank?            = nil
+    var suit: FrameSuit        = .unspecified
+    var isEmpty: Bool { rank == nil }
+}
+
+/// A street's group of frames plus its single suit mode. Hole = 2 frames, flop = 3, turn/river = 1.
+/// The mode determines how suit info is stored and rendered (see `groupNotation` in the view):
+/// - `.bound`        per-frame suit (interleaved entry) — `AdJx`
+/// - `.footnote`     an unassigned trailing note of suit letters — `AJdx`
+/// - `.relationship` an abstract relationship/texture from a shortcut button — `AJs` / `Q53tt`
+struct CardGroup: Equatable, Codable {
+    enum SuitMode: Equatable, Codable { case none, bound, footnote, relationship }
+
+    var frames: [CardFrame]
+    var mode: SuitMode = .none
+    var footnote: [String] = []      // ordered suit letters ("s/h/d/c" or "x"); used only in .footnote
+    var footnoteCursor: Int = 0      // wrap-replace pointer once the footnote is full
+    var relationship: String? = nil  // "s","o" (hole) | "r","m","tt" (flop); used only in .relationship
+    var suitRun: Int = 1             // turn/river only: count of this card's suit on the board (4h=1, 4hhh=3)
+
+    var capacity: Int { frames.count }
+    var ranksFilled: Int { frames.filter { $0.rank != nil }.count }
+    var isFull: Bool { ranksFilled == capacity }
+    var hasAnyRank: Bool { ranksFilled > 0 }
+    var firstEmptyIndex: Int? { frames.firstIndex(where: { $0.isEmpty }) }
+
+    init(capacity: Int) { self.frames = Array(repeating: CardFrame(), count: capacity) }
+
+    mutating func reset() {
+        frames = Array(repeating: CardFrame(), count: capacity)
+        mode = .none; footnote = []; footnoteCursor = 0; relationship = nil; suitRun = 1
+    }
+
+    /// Flat `[Card]` collapse for simple consumers — rank + the bound suit (nil suit when unknown/footnote/
+    /// relationship). The lossless detail stays in the group; this is the lossy convenience derivation.
+    var asCards: [Card] {
+        frames.compactMap { f in
+            guard let rank = f.rank else { return nil }
+            return Card(rank: rank, suit: f.suit.knownSuit)
+        }
     }
 }
