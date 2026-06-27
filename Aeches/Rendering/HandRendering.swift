@@ -133,6 +133,48 @@ func groupNotation(_ g: CardGroup) -> String {
     }
 }
 
+// MARK: - Dead-card detection (duplicate block)
+
+/// Every *known dead card* across the given groups, keyed `"Qh"` (rank letter + suit letter). A card is
+/// known-dead only when its rank is unambiguous:
+/// - a **bound** frame carries a known per-card suit (`Qh`), or
+/// - a **footnote** suit on a group whose rank-bearing frames all share one rank — a pair (`QQhd`) or
+///   trips (`QQQhdc`) — pins each suit to that rank even though we don't know which physical card.
+/// A mixed-rank footnote (`QJdh`) stays ambiguous and contributes nothing. Drives the picker's
+/// duplicate-suit block (see `suitIsDuplicate`).
+func deadCardKeys(in groups: [CardGroup]) -> Set<String> {
+    var keys = Set<String>()
+    for g in groups {
+        for f in g.frames {
+            if let r = f.rank, let s = f.suit.knownSuit { keys.insert(r.rawValue + s.rawValue) }
+        }
+        if g.mode == .footnote {
+            let ranks = Set(g.frames.compactMap { $0.rank })
+            if ranks.count == 1, let r = ranks.first {
+                for letter in g.footnote where letter != "x" { keys.insert(r.rawValue + letter) }
+            }
+        }
+    }
+    return keys
+}
+
+/// Default any ranked, suitless card in a group to explicit `x` (`.unknown`) — applied when a bank is
+/// left, so a card typed without a suit reads as "rank, unknown suit" rather than looking incomplete.
+/// No-ops when the group should keep its texture option (`keepsTexture`, a full no-suit hole/flop group
+/// the caller decides) or carries suit info off the frame (footnote/relationship). A `.none` group with
+/// any card x'd becomes `.bound` (it now holds explicit per-card suits).
+func normalizingUnsuited(_ g: CardGroup, keepsTexture: Bool) -> CardGroup {
+    guard !keepsTexture, g.mode == .none || g.mode == .bound else { return g }
+    var out = g
+    var changed = false
+    for i in out.frames.indices where out.frames[i].rank != nil && out.frames[i].suit == .unspecified {
+        out.frames[i].suit = .unknown
+        changed = true
+    }
+    if changed, out.mode == .none { out.mode = .bound }
+    return out
+}
+
 /// The footnote token: ordered suit letters padded to the group's capacity with `x`.
 private func paddedFootnote(_ g: CardGroup) -> String {
     var letters = g.footnote

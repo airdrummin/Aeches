@@ -1737,34 +1737,44 @@ struct HandEntryView: View {
         return true
     }
 
-    /// Every fully-specified card (rank + a *bound* known suit) already in this hand, across all groups,
-    /// keyed `"As"` — excluding one frame (the cursor, so re-binding its own card never blocks itself).
-    /// Only bound frames carry a known per-card suit, so this is inherently "bound only": footnote and
-    /// relationship suits are unassigned and contribute nothing.
+    /// Every *known dead card* already in this hand, across all groups, keyed `"Qh"` — excluding one
+    /// frame (the cursor, so re-binding its own card never blocks itself). The dead-card logic is the
+    /// pure `deadCardKeys(in:)`; here we just gather the live groups and blank the cursor frame's bound
+    /// suit before delegating. (Footnote letters aren't frame-tied, so a pair's footnote stays in —
+    /// catching a repeated suit within the pair.)
     private func usedCardKeys(excluding exclude: CardTarget?, index: Int?) -> Set<String> {
-        var keys = Set<String>()
         var groups: [(CardTarget, CardGroup)] = [
             (.street(.hole), holeGroup), (.street(.flop), flopGroup),
             (.street(.turn), turnGroup), (.street(.river), riverGroup)
         ]
         for (seat, g) in villainGroups { groups.append((.villain(seat), g)) }
-        for (target, g) in groups {
-            for (i, f) in g.frames.enumerated() {
-                if target == exclude, i == index { continue }
-                if let r = f.rank, let s = f.suit.knownSuit { keys.insert(r.rawValue + s.rawValue) }
-            }
+        if let exclude, let index,
+           let gi = groups.firstIndex(where: { $0.0 == exclude }), index < groups[gi].1.frames.count {
+            groups[gi].1.frames[index].suit = .unspecified
         }
-        return keys
+        return deadCardKeys(in: groups.map(\.1))
     }
 
-    /// True when binding `suit` to the cursor card would re-create a card already in the hand — so the
-    /// suit button is disabled. Only fires on the bound path (a suit that appends to a footnote isn't a
-    /// concrete card and can't duplicate). Spans hero, board, and villain groups.
+    /// True when choosing `suit` would re-create a card already known to be in the hand — so the suit
+    /// button is disabled. Spans hero, board, and villain groups. Fires on two paths:
+    /// - **bound**: the suit binds to the cursor frame, pinning `cursorRank + suit`;
+    /// - **footnote on a pair/trips**: every rank-bearing frame shares one rank, so the suit pins
+    ///   `pairRank + suit` even unassigned — this blocks a repeat within the pair (`QQc` → 2nd ♣) and a
+    ///   suit already dead elsewhere. A mixed-rank footnote (`QJ`) is ambiguous and never blocks.
     private func suitIsDuplicate(_ suit: String) -> Bool {
         guard let g = entryGroup else { return false }
         let willBind = g.mode == .bound || (g.mode == .none && (g.capacity == 1 || g.firstEmptyIndex != nil))
-        guard willBind, focusIndex < g.frames.count, let rank = g.frames[focusIndex].rank else { return false }
-        return usedCardKeys(excluding: entryTarget, index: focusIndex).contains(rank.rawValue + suitLetter(suit))
+        let rank: Rank?
+        if willBind {
+            rank = (focusIndex < g.frames.count) ? g.frames[focusIndex].rank : nil
+        } else {
+            let ranks = Set(g.frames.compactMap { $0.rank })
+            rank = ranks.count == 1 ? ranks.first : nil   // footnote is concrete only on a single rank
+        }
+        guard let r = rank else { return false }
+        // index: focusIndex excludes only a bound cursor frame; the current group's footnote letters
+        // stay in the set, so a repeated suit within a pair is caught.
+        return usedCardKeys(excluding: entryTarget, index: focusIndex).contains(r.rawValue + suitLetter(suit))
     }
 
     // Docked below the strip (not a covering sheet). The strip slots are the frames — they stay
@@ -2338,6 +2348,7 @@ struct HandEntryView: View {
     private func openCardEntry(_ street: CardStreet) { openCardEntry(.street(street)) }
 
     private func openCardEntry(_ target: CardTarget) {
+        if let current = entryTarget, current != target { normalizeUnsuited(current) }
         entryTarget = target
         effEntryVisible = false         // close the eff keypad so the two never show at once
         let g = group(for: target)
@@ -2346,8 +2357,34 @@ struct HandEntryView: View {
     }
 
     private func closeEntry() {
-        entryTarget = nil    // no mutation; any blank renders as "x" via notation
+        if let current = entryTarget { normalizeUnsuited(current) }
+        entryTarget = nil
         syncClosedHandCards()   // post-close card edits (hero or villain) re-sync onto the saved Hand
+    }
+
+    /// On leaving a bank, default any ranked card with no chosen suit to explicit `x` — so a card you
+    /// typed but didn't suit reads as "rank, unknown suit" (`Qx`) rather than looking incomplete.
+    /// Skips footnote/relationship groups (their suit info lives off the frame, not on it) and a full,
+    /// untouched hole/flop/villain group (left bare so its one-tap texture shortcuts stay available).
+    private func normalizeUnsuited(_ target: CardTarget) {
+        let g = group(for: target)
+        let keepsTexture = keepsTextureOption(g, street: target.behaviorStreet)
+        let normalized = normalizingUnsuited(g, keepsTexture: keepsTexture)
+        if normalized != g { setGroup(target, normalized) }
+    }
+
+    /// A full, no-suit hole/flop/villain group still offers the one-tap texture shortcuts
+    /// (suited/offsuit, rainbow/mono/two-tone), so it's left bare on exit to keep them — and the
+    /// shorthand clean. Single cards, pairs, and turn/river have no texture and take the `x` default.
+    private func keepsTextureOption(_ g: CardGroup, street: CardStreet) -> Bool {
+        guard g.isFull, g.mode == .none else { return false }
+        switch street {
+        case .hole:
+            let ranks = g.frames.compactMap { $0.rank }
+            return !(ranks.count == 2 && ranks[0] == ranks[1])   // a pair has no suited/offsuit
+        case .flop:         return true
+        case .turn, .river: return false
+        }
     }
 
     /// The bank that "Next" advances to, in deal order. Nil after the river (Next becomes Done).
