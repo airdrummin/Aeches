@@ -1,6 +1,32 @@
 # Phase 3 — Pure renderers (the DRY core)
 
-**Status:** ⬜ Not started · **Depends on:** Phase 1 · **Unblocks:** History (4), Replay (5)
+**Status:** ✅ Done · **Depends on:** Phase 1 · **Unblocks:** History (4), Replay (5)
+
+## As built (deviations from the original design below)
+
+- **New `Aeches/Rendering/HandRendering.swift`** holds the pure `seatStates(...)`, `transcript(...)`,
+  `groupNotation(_:)`, and the transcript-only helpers (`actionToken`, `collapsedSegments`,
+  `boardToken`, `paddedFootnote`). `HandEntryView.seatActions` / `handShorthand` are now thin wrappers.
+- **`transcript` is pieces-based, with a `transcript(for: Hand)` convenience.** The core takes the
+  discrete inputs (so the live recorder can pass `buttonSeat: nil` before the button is placed and its
+  live `currentStreet`/phase); History & Replay call `transcript(for: hand)`, which unpacks a saved
+  hand and self-derives terminal state. The convenience matches the spec's signature.
+- **Terminal state passed in as `showdownReached: Bool`** (confirmed in review): re-deriving "betting
+  complete" in the renderer would duplicate close-detection. The result line stays owned by
+  `hand.outcome` (no second source of truth for "closed"); only the villain "shows" lines key off the
+  flag. `transcript(for:)` defaults it to `Hand.reachedShowdown`.
+- **New stored `Hand.lastStreet: StreetName`** (set from `currentStreet` in `buildHand`) is the
+  read-out bound. It can't be recovered from `streets`: a run-out records an empty `turn` street and
+  never records the `river`, and a fold-out can carry a stray post-hoc later-street card. Storing it
+  keeps the hand self-describing and gives exact parity. **`storeVersion` bumped to 2.**
+- Added computed **`Hand.reachedShowdown`** (≥2 unfolded at the end, hero included).
+- **Per-street replay slicing helpers deferred to Phase 5** — `seatStates` already takes an explicit
+  per-street slice; the `foldedBefore(street:in:)` / `actions(on:in:)` wrappers will land with Replay,
+  their only consumer.
+- Verified by a temporary parity test (round-trip stability, the `lastStreet` bound for run-out vs.
+  fold-out, fold-ghost + all-in badge, owes-fresh-response demotion) — green, then removed.
+
+---
 
 ## Goal
 

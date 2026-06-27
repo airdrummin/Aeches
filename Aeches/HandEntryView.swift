@@ -1004,16 +1004,14 @@ struct HandEntryView: View {
     /// stored) so it always reflects the latest `highlightedSeat` — the moment a committed input
     /// advances the cue, the seat it lands on re-derives, with no resync plumbing.
     private var seatActions: [Int: SeatState] {
-        var result: [Int: SeatState] = [:]
-
         // The street whose actions the table renders. Normally the live street (`actionsThisStreet`).
         // But a run-out fast-forwards `currentStreet` to the river and empties `actionsThisStreet`
         // (advanceStreetOrShowdown → closeStreet), burying the last contested street's actions in
         // `streets` — so a non-all-in caller would render actionless at the frozen table. At a closed
         // hand we therefore fall back to the last street that actually had action, matching the
-        // transcript (which already reads `streets`). The fallback is gated on a terminal phase: an
-        // empty live street is also the normal state right after a street advances, and there we must
-        // keep it empty (a fresh street), not resurrect the prior street's actions.
+        // transcript. The fallback is gated on a terminal phase: an empty live street is also the
+        // normal state right after a street advances, and there we must keep it empty (a fresh street).
+        // This is recording-only — Replay passes the explicit per-street slice.
         let displayStreetActions: [Action] = {
             if !actionsThisStreet.isEmpty { return actionsThisStreet }
             if phase == .showdown || phase == .handClosed {
@@ -1022,75 +1020,14 @@ struct HandEntryView: View {
             return actionsThisStreet   // empty + recording → genuinely fresh street, keep it empty
         }()
 
-        // Ghost seats for folds that happened on prior streets (relative to the displayed street).
-        let foldedThisStreet = Set(displayStreetActions.filter { $0.actionType == .fold }.map { $0.seatIndex })
-        for seat in foldedSeats where !foldedThisStreet.contains(seat) {
-            result[seat] = SeatState(action: .foldedOut)
-        }
-
-        // Build each seat's action history this street in log order, capturing the bet level frozen
-        // at each entry so prior aggression keeps its pip layout.
-        var histories: [Int: [(action: SeatState.Action, betLevel: Int)]] = [:]
-        for action in displayStreetActions {
-            let seatAction: SeatState.Action
-            switch action.actionType {
-            case .fold:  seatAction = .fold
-            case .call:  seatAction = .call
-            case .check: seatAction = .check
-            case .open:  seatAction = .open
-            case .raise: seatAction = .raise
-            }
-            let levelAtThisPoint = displayStreetActions
-                .prefix(while: { $0.id != action.id })
-                .filter { $0.actionType == .open || $0.actionType == .raise }
-                .count + (action.actionType == .open || action.actionType == .raise ? 1 : 0)
-            histories[action.seatIndex, default: []].append((seatAction, levelAtThisPoint))
-        }
-
-        // The most recent entry is the seat's current state; everything before it is shown as
-        // prior-action badges (oldest first).
-        for (seat, history) in histories {
-            // The seat on the clock that owes a FRESH response — it acted earlier this street but a
-            // bet/raise was logged after (e.g. an opener facing a 3-bet, or a checker facing a bet) —
-            // has not made its current decision yet. Demote its whole history to prior pills and leave
-            // the center empty, so it reads like any other on-the-clock seat. Only the on-clock seat
-            // does this; other owing seats keep their last action shown until the cue reaches them.
-            if seat == highlightedSeat, owesAction(seat) {
-                result[seat] = SeatState(action: nil, priorActions: history.map { $0.action })
-                continue
-            }
-            let current = history.last!
-            let prior = history.dropLast().map { $0.action }
-            let sizeLabel = displayStreetActions.last { $0.seatIndex == seat }?.sizing?.label
-            result[seat] = SeatState(
-                action: current.action,
-                betLevel: current.betLevel,
-                priorActions: Array(prior),
-                sizeLabel: sizeLabel,
-                isAllIn: allInSeats.contains(seat)
-            )
-        }
-
-        // All-in badge persists across streets. On a street where an all-in seat has no action of
-        // its own, surface it with the symbol of HOW it got all-in (jam-bet →, jam-raise ↑↑, or
-        // call-all-in ✓) so the table still reads "this seat is committed" every street.
-        let everyAction = streets.flatMap { $0.actions } + actionsThisStreet
-        for seat in allInSeats {
-            if var existing = result[seat] {
-                existing.isAllIn = true
-                result[seat] = existing
-            } else if let mark = everyAction.last(where: { $0.seatIndex == seat && $0.sizing?.label == "All-in" }) {
-                let sym: SeatState.Action
-                switch mark.actionType {
-                case .call:  sym = .call
-                case .open:  sym = .open
-                case .raise: sym = .raise
-                default:     sym = .call
-                }
-                result[seat] = SeatState(action: sym, isAllIn: true)
-            }
-        }
-        return result
+        return seatStates(
+            streetActions: displayStreetActions,
+            foldedBefore:  foldedSeats,
+            allIn:         allInSeats,
+            allActions:    streets.flatMap { $0.actions } + actionsThisStreet,
+            highlighted:   highlightedSeat,
+            owes:          owesAction
+        )
     }
 
     // MARK: - Undo
@@ -1774,13 +1711,6 @@ struct HandEntryView: View {
         }
     }
 
-    /// The footnote letters padded to the group size with "x" (e.g. [d] → "dx", [h,h] → "hhx").
-    /// Used by `groupNotation` to render the footnote token.
-    private func paddedFootnote(_ g: CardGroup) -> String {
-        var letters = g.footnote
-        while letters.count < g.capacity { letters.append("x") }
-        return letters.joined()
-    }
 
     // MARK: - Card Picker Panel
 
@@ -2551,196 +2481,44 @@ struct HandEntryView: View {
         }
     }
 
-    /// The group's compact shorthand (see ShorthandReference.md §2), driven by its suit mode:
-    /// none `AJ` · bound `AdJx` · footnote `AJdx` (letters padded to N with `x`) · relationship
-    /// `AJs`/`Q53tt`. Single-frame groups (turn/river) are bound-only and never mark an unknown.
-    private func groupNotation(_ street: CardStreet) -> String { groupNotation(group(for: street)) }
-
-    /// Notation for an explicit group (used for villain hole groups as well as the hero streets).
-    private func groupNotation(_ g: CardGroup) -> String {
-        let ranks = g.frames.compactMap { $0.rank?.rawValue }
-        guard !ranks.isEmpty else { return "" }
-        let rankStr = ranks.joined()
-
-        switch g.mode {
-        case .none:
-            return rankStr                                       // AJ / Q53 / J
-        case .relationship:
-            return rankStr + (g.relationship ?? "")              // AJs / Q53r / Q53tt
-        case .footnote:
-            return rankStr + paddedFootnote(g)                   // AJ+[d] -> AJdx; Q53+[h,h] -> Q53hhx
-        case .bound:
-            // A blank card reads as "x" only when a partner carries a real suit (the inferred AhKx);
-            // an explicit unknown always reads as "x" (even alone — Jx, Qx).
-            let anyKnown = g.frames.contains { $0.suit.knownSymbol != nil }
-            let markUnknown = anyKnown && g.capacity > 1
-            return g.frames.compactMap { f -> String? in
-                guard let r = f.rank?.rawValue else { return nil }
-                switch f.suit {
-                // The suit letter repeats by suitRun — the turn/river board count (4h / 4hh / 4hhh).
-                // suitRun is 1 everywhere except a multiplied turn/river card, so hole/flop are unchanged.
-                // `s` is a typed `Suit` now, so its rawValue IS the suit letter — no glyph conversion.
-                case .known(let s): return r + String(repeating: s.rawValue, count: g.suitRun)
-                case .unknown:      return r + "x"
-                case .unspecified:  return markUnknown ? r + "x" : r
-                }
-            }.joined()                                           // AdJx / Qh5h3x / Jh / Jx
-        }
-    }
+    // Card-group shorthand (`groupNotation(_ g: CardGroup)`, see ShorthandReference.md §2) lives in
+    // Rendering/HandRendering.swift. Call it with a live group via `group(for:)`.
 
     // MARK: - Hand Shorthand (see ShorthandReference.md)
 
     /// The running shorthand transcript — a pure render of the action log + board + hero cards.
     /// Computed (like `seatActions`) so it tracks Rewind/edits automatically.
     private var handShorthand: String {
-        let hero = heroSeat ?? -1
-        var lines: [String] = []
-
-        // Header: Hand #N - [cards] - [position], building from what is currently known.
-        var header = "Hand #\(handNumber)"
-        if let btn = buttonSeat, hero >= 0 {
-            let pos = calculatePositions(buttonSeatIndex: btn,
-                                         activeSeatIndices: occupiedSeats)[hero] ?? ""
-            let cards = groupNotation(.hole)
-            if !pos.isEmpty {
-                header += cards.isEmpty ? " - \(pos)" : " - \(cards) - \(pos)"
-            }
+        // Fold the in-progress current street's actions into the streets list so the pure builder reads
+        // every street uniformly (a saved hand already carries them in `streets`). `buttonSeat` is
+        // passed as-is — nil before it's placed, so the header omits the position. Terminal-state
+        // signals are mapped from `phase`: villain "shows" lines reveal at showdown / a 2+ close, the
+        // result line only once an outcome exists.
+        var streetsForRender = streets
+        if !actionsThisStreet.isEmpty {
+            streetsForRender.append(Street(name: currentStreet, actions: actionsThisStreet))
         }
-        // Effective stack trails the header, independent of cards/position so it shows the moment it's
-        // set (e.g. "Hand #1 - 50bb eff" even before the button is placed). Always big blinds.
-        if let eff = effectiveStack { header += " - \(eff)bb eff" }
-        lines.append(header)
-        lines.append("")   // blank line separates the header from the action lines
-
-        let order: [StreetName] = [.preflop, .flop, .turn, .river]
-        let currentIdx = order.firstIndex(of: currentStreet) ?? 0
-
-        for street in order.prefix(currentIdx + 1) {
-            let acts = actions(on: street)
-            let board = boardToken(for: street)
-            if acts.isEmpty && board.isEmpty { continue }
-
-            var segments: [String] = []
-            if !board.isEmpty { segments.append(board) }
-
-            let isPreflop = (street == .preflop)
-            var aggCount = 0
-            var sawAgg = false
-            var pairs: [(actor: String, token: String)] = []
-
-            for a in acts {
-                // Preflop: suppress a fold if it is that player's only action on this street —
-                // they were never voluntarily in the hand (pure pre-action folder).
-                if isPreflop && a.actionType == .fold {
-                    let seatActs = acts.filter { $0.seatIndex == a.seatIndex }
-                    if seatActs.count == 1 { continue }
-                }
-
-                let isAgg = (a.actionType == .open || a.actionType == .raise)
-                if isAgg { aggCount += 1 }
-                let token = actionToken(a, isPreflop: isPreflop, aggIndex: aggCount, priorAggression: sawAgg)
-                if isAgg { sawAgg = true }
-
-                let actor = (a.seatIndex == hero) ? "Hero" : a.position
-                pairs.append((actor: actor, token: token))
-            }
-
-            segments += collapsedSegments(pairs)
-            if !segments.isEmpty { lines.append(segments.joined(separator: ". ") + ".") }
-        }
-
-        // Villain shown cards (showdown) — "CO shows AQs." lines, before any result line (§9).
-        if showdownVillainsVisible {
-            for seat in showdownVillains {
-                let note = villainGroups[seat].map(groupNotation) ?? ""
-                if !note.isEmpty { lines.append("\(positionFor(seat: seat)) shows \(note).") }
-            }
-        }
-
-        // Showdown result line (fold-out has no tag — the final fold ends it).
-        if phase == .handClosed, let outcome = currentOutcome {
-            switch outcome {
-            case .win:  lines.append("Hero wins.")
-            case .lose: lines.append("Hero loses.")
-            case .chop: lines.append("Chop.")
-            }
-        }
-
-        return lines.joined(separator: "\n")
+        return transcript(
+            handNumber:       handNumber,
+            heroSeat:         heroSeat ?? -1,
+            buttonSeat:       buttonSeat,
+            occupiedSeats:    occupiedSeats,
+            holeGroup:        holeGroup,
+            boardGroups:      (flopGroup.hasAnyRank  ? flopGroup  : nil,
+                               turnGroup.hasAnyRank  ? turnGroup  : nil,
+                               riverGroup.hasAnyRank ? riverGroup : nil),
+            villainGroups:    villainGroups,
+            effectiveStack:   effectiveStack,
+            streets:          streetsForRender,
+            throughStreet:    currentStreet,
+            showdownVillains: showdownVillains,
+            showdownReached:  (phase == .showdown || phase == .handClosed) && activeSeatSequence.count >= 2,
+            outcome:          phase == .handClosed ? currentOutcome : nil
+        )
     }
 
-    /// Collapses consecutive (actor, token) pairs that share the same token into
-    /// "A & B verb" or "A, B & C verb" entries. Non-consecutive same-token pairs
-    /// are not collapsed.
-    private func collapsedSegments(_ pairs: [(actor: String, token: String)]) -> [String] {
-        var result: [String] = []
-        var i = 0
-        while i < pairs.count {
-            let token = pairs[i].token
-            var group = [pairs[i].actor]
-            while i + 1 < pairs.count && pairs[i + 1].token == token {
-                i += 1
-                group.append(pairs[i].actor)
-            }
-            if group.count == 1 {
-                result.append("\(group[0]) \(token)")
-            } else {
-                let joined = group.dropLast().joined(separator: ", ") + " & " + group.last!
-                result.append("\(joined) \(token)")
-            }
-            i += 1
-        }
-        return result
-    }
-
-    /// Recorded actions on a street: completed streets live in `streets`, the live one in `actionsThisStreet`.
-    private func actions(on street: StreetName) -> [Action] {
-        if let s = streets.first(where: { $0.name == street }) { return s.actions }
-        if street == currentStreet { return actionsThisStreet }
-        return []
-    }
-
-    /// The bare board token leading a post-flop line (empty preflop). Reuses the card-notation formatter.
-    private func boardToken(for street: StreetName) -> String {
-        switch street {
-        case .preflop: return ""
-        case .flop:    return groupNotation(.flop)
-        case .turn:    return groupNotation(.turn)
-        case .river:   return groupNotation(.river)
-        }
-    }
-
-    /// The verb-or-size token for one action. Elision: a sized wager shows just the size (All-in → jam).
-    private func actionToken(_ a: Action, isPreflop: Bool, aggIndex: Int, priorAggression: Bool) -> String {
-        switch a.actionType {
-        case .fold:  return "fold"
-        case .check: return "chk"
-        case .call:
-            if a.sizing?.label == "All-in" { return "call (all-in)" }   // a call that committed the rest
-            return (isPreflop && !priorAggression) ? "limp" : "call"
-        case .open:
-            // The opening wager of a street (post-flop bet). When sized it elides to the bare size;
-            // the All-in marker becomes the verb `jam`.
-            if let label = a.sizing?.label { return label == "All-in" ? "jam" : label }
-            return isPreflop ? "R" : "bet"
-        case .raise:
-            if a.sizing?.label == "All-in" { return "jam" }
-            // aggIndex 1 is the pre-flop open (recorded as a `.raise` by the Raise button). It's the
-            // opening wager, so it behaves like `.open` above — bare size when sized, plain "R"
-            // (shorthand for raise) when not. (Post-flop the open is an `.open`, so a `.raise` there
-            // is always aggIndex 2+.)
-            if aggIndex <= 1 { return a.sizing?.label ?? "R" }
-            // A genuine re-raise. Escalation ladder, unified across streets: `level` counts wagers
-            // including the implied pre-flop blind (the first bet in front), so a pre-flop open and a
-            // post-flop first raise are both level 2 → "R" (raise); level 3+ → "3b", "4b", "5b" …
-            // The label is always kept; a size, when entered, is appended (`3b 2.3x`, `R 3x`) so
-            // the escalation a bare size would hide stays visible.
-            let level = aggIndex + (isPreflop ? 1 : 0)
-            let verb = level <= 2 ? "R" : "\(level)b"
-            if let label = a.sizing?.label { return "\(verb) \(label)" }
-            return verb
-        }
-    }
+    // `collapsedSegments`, `actions(on:in:)`, `boardToken`, and `actionToken` are pure transcript
+    // helpers — they live in Rendering/HandRendering.swift, fed by `handShorthand` above.
 
     // MARK: - Hand Lifecycle
 
@@ -2801,6 +2579,7 @@ struct HandEntryView: View {
             riverGroup: riverGroup.hasAnyRank ? riverGroup : nil,
             villainGroups: villainGroups,
             streets: streetsToSave,
+            lastStreet: currentStreet,   // furthest street reached — the transcript/replay read-out bound
             outcome: outcome,
             potSize: nil,
             potUnit: session.potUnit,

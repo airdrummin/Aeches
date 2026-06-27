@@ -166,6 +166,11 @@ struct Hand: Identifiable, Codable {
     var villainGroups: [Int: CardGroup]  = [:]   // seatIndex → that villain's shown cards; showdown only
 
     var streets:          [Street] = []   // only streets that were played (actions only — no board)
+    /// The furthest street the hand reached (the live `currentStreet` at close). Stored because it
+    /// can't be recovered from `streets`: a run-out records an empty `turn` street and never records
+    /// the `river` at all, and a fold-out can carry a stray later-street card from post-hoc entry.
+    /// This is the transcript/replay upper bound — how far the board is read out.
+    var lastStreet:       StreetName = .preflop
     var outcome:          Outcome?
     var potSize:          Double?
     var potUnit:          PotUnit?
@@ -183,6 +188,15 @@ struct Hand: Identifiable, Codable {
         let folded = Set(streets.flatMap { $0.actions }
             .filter { $0.actionType == .fold }.map { $0.seatIndex })
         return occupiedSeatIndices.filter { $0 != heroSeatIndex && !folded.contains($0) }
+    }
+
+    /// True when the hand went to a contested end (a showdown / run-out), i.e. ≥2 seats — hero
+    /// included — were unfolded at the end. A fold-out leaves exactly one, so it's false. Gates the
+    /// villain "shows" lines in the transcript for a saved hand.
+    var reachedShowdown: Bool {
+        let folded = Set(streets.flatMap { $0.actions }
+            .filter { $0.actionType == .fold }.map { $0.seatIndex })
+        return occupiedSeatIndices.filter { !folded.contains($0) }.count >= 2
     }
 }
 

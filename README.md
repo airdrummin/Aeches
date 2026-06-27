@@ -422,6 +422,7 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 | `Aeches/AechesApp.swift` | App entry point, auth gate, owns + injects `SessionStore`, flushes on background |
 | `Aeches/Persistence/SessionStore.swift` | `ObservableObject` single source of truth — session/hand CRUD (`upsertSession`, `saveHand` upsert-by-id, `allHands`, `hand(id:)`) over an injected `HandStore` |
 | `Aeches/Persistence/HandStore.swift` | The cloud seam: `HandStore` protocol + `FileHandStore` (atomic, debounced JSON) + `InMemoryHandStore` |
+| `Aeches/Rendering/HandRendering.swift` | Pure renderers — `seatStates(...)` (table visuals) and `transcript(...)` (shorthand) as functions of hand data, plus `groupNotation(_:)`. Recording, History, and Replay all draw through these (`HandEntryView` calls them as thin wrappers) |
 
 ---
 
@@ -536,6 +537,7 @@ riverGroup:    CardGroup?
 villainGroups: [Int: CardGroup] // seatIndex → that villain's shown cards; showdown only
 
 streets:        [Street]   // only streets that were played (actions only — no board)
+lastStreet:     StreetName // furthest street reached (currentStreet at close) — the transcript/replay read-out bound; not recoverable from streets (run-out skips river, fold-out may carry a stray card)
 outcome:        Outcome?   // nil if hand abandoned or outcome not recorded
 potSize:        Double?
 potUnit:        PotUnit?

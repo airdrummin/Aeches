@@ -60,7 +60,7 @@ pure functions of a `Hand`, so recording, History rows, and Replay all render th
 |---|---|---|---|---|
 | 1 | Lossless `Hand` (canonical card model) | ✅ Done | — | [DEV-PHASE1-HistoryFeature.md](DEV-PHASE1-HistoryFeature.md) |
 | 2 | Store + persistence (`SessionStore` / `HandStore`) | ✅ Done | 1 | [DEV-PHASE2-HistoryFeature.md](DEV-PHASE2-HistoryFeature.md) |
-| 3 | Pure renderers (seat deriver + transcript builder) | ⬜ Not started | 1 | [DEV-PHASE3-HistoryFeature.md](DEV-PHASE3-HistoryFeature.md) |
+| 3 | Pure renderers (seat deriver + transcript builder) | ✅ Done | 1 | [DEV-PHASE3-HistoryFeature.md](DEV-PHASE3-HistoryFeature.md) |
 | 4 | History list UI | ⬜ Not started | 2, 3 | [DEV-PHASE4-HistoryFeature.md](DEV-PHASE4-HistoryFeature.md) |
 | 5 | Replay (read-only, step-through) | ⬜ Not started | 3, 4 | [DEV-PHASE5-HistoryFeature.md](DEV-PHASE5-HistoryFeature.md) |
 | 6 | Edit (rehydrate + write-back) | ⬜ Not started | 2, 5 | [DEV-PHASE6-HistoryFeature.md](DEV-PHASE6-HistoryFeature.md) |
