@@ -8,6 +8,88 @@ import Foundation
 //
 // `SeatState` and the seat render components are unchanged — this file only moves *derivation*.
 
+// MARK: Per-street slicing (Replay drives the deriver street-by-street)
+
+/// Recorded actions on one street of a saved hand (board cards are not actions — they're on the groups).
+func actions(on street: StreetName, in hand: Hand) -> [Action] {
+    hand.streets.first(where: { $0.name == street })?.actions ?? []
+}
+
+/// Seats that folded on streets strictly *before* `street` — they ghost out when that street renders.
+/// (Folds on the street itself come from its own actions and render as live fold states.)
+func foldedBefore(street: StreetName, in hand: Hand) -> Set<Int> {
+    let order: [StreetName] = [.preflop, .flop, .turn, .river]
+    guard let idx = order.firstIndex(of: street) else { return [] }
+    let earlier = Set(order.prefix(idx))
+    let acts = hand.streets.filter { earlier.contains($0.name) }.flatMap { $0.actions }
+    return Set(acts.filter { $0.actionType == .fold }.map(\.seatIndex))
+}
+
+/// Replay stop points for a street: the deal (0), then each action — except a preflop *pure open-fold*
+/// (a seat whose only preflop action is that fold) earns no step; it just appears folded at the next
+/// meaningful action. Mirrors the transcript's fold elision. The street's final action is always kept
+/// so the end state shows. Post-flop shows every action.
+func replayStops(for street: StreetName, in hand: Hand) -> [Int] {
+    let acts = actions(on: street, in: hand)
+    let n = acts.count
+    guard n > 0 else { return [0] }
+    guard street == .preflop else { return Array(0...n) }
+    var counts = [0]
+    for k in 1...n {
+        let a = acts[k - 1]
+        let pureOpenFold = a.actionType == .fold && acts.filter { $0.seatIndex == a.seatIndex }.count == 1
+        if k == n || !pureOpenFold { counts.append(k) }   // always keep the final state
+    }
+    return counts
+}
+
+// MARK: Card-group display helpers (pure — shared by the recording strip and Replay)
+
+/// A footnote whose entered letters are all the *same* real suit (QJcc, Q53hhh) — so each face can draw
+/// that suit's pip, display-only. Returns the suit glyph, or nil (mixed, partial, or `x`).
+func uniformFootnoteSuit(_ g: CardGroup) -> String? {
+    guard g.mode == .footnote, g.footnote.count == g.capacity else { return nil }
+    let letters = Set(g.footnote)
+    guard letters.count == 1, let letter = letters.first else { return nil }
+    switch letter {
+    case "s": return "♠"; case "h": return "♥"; case "d": return "♦"; case "c": return "♣"
+    default:  return nil          // "x" (explicit unknown) is not a suit
+    }
+}
+
+/// The frame to draw on a face: the real frame, or — for a uniform footnote — a copy with the derived
+/// suit injected so the face renders a colored pip like a bound card (no model mutation).
+func faceFrame(_ frame: CardFrame, footnoteSuit: String?) -> CardFrame {
+    guard let s = footnoteSuit, let suit = Suit(symbol: s) else { return frame }
+    var f = frame; f.suit = .known(suit); return f
+}
+
+/// A partial footnote's suits as glyphs, padded to capacity with "x": [d,s] → ["♦","♠"],
+/// [h] (capacity 2) → ["♥","x"]. (The uniform-all-same case is shown on the faces instead.)
+func footnoteGlyphs(_ g: CardGroup) -> [String] {
+    var letters = g.footnote
+    while letters.count < g.capacity { letters.append("x") }
+    return letters.map { l in
+        switch l {
+        case "s": return "♠"; case "h": return "♥"; case "d": return "♦"; case "c": return "♣"
+        default:  return "x"
+        }
+    }
+}
+
+/// The relationship code (s/o/r/m/tt) spelled out for the texture badge — words, not letters, so the
+/// abstract texture is unmistakable and "suited" never collides with the spade glyph.
+func relationshipWord(_ code: String?) -> String? {
+    switch code {
+    case "s":  return "suited"
+    case "o":  return "offsuit"
+    case "r":  return "rainbow"
+    case "m":  return "mono"
+    case "tt": return "two-tone"
+    default:   return nil
+    }
+}
+
 // MARK: Seat-state deriver
 
 /// Each seat's `SeatState` for one rendered street: fold ghosts, per-seat action histories with frozen

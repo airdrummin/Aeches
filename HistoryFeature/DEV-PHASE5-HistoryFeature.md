@@ -1,6 +1,6 @@
 # Phase 5 — Replay (read-only, step-through)
 
-**Status:** ⬜ Not started · **Depends on:** Phase 3 (renderers), Phase 4 (detail screen)
+**Status:** ✅ Done · **Depends on:** Phase 3 (renderers), Phase 4 (detail screen)
 
 ## Goal
 

@@ -97,25 +97,23 @@ struct HandDetailView: View {
 
     private var actions: some View {
         HStack(spacing: 12) {
-            actionButton("Replay", icon: "play.fill")        // → ReplayView(hand:)  (Phase 5)
-            actionButton("Edit",   icon: "pencil")           // → recorder in edit mode (Phase 6)
+            NavigationLink { ReplayView(hand: hand) } label: {
+                actionLabel("Replay", icon: "play.fill", enabled: true)
+            }
+            .buttonStyle(.plain)
+            actionLabel("Edit", icon: "pencil", enabled: false)   // → recorder in edit mode (Phase 6)
         }
     }
 
-    private func actionButton(_ title: String, icon: String) -> some View {
-        // Present-but-stubbed: the nav slots exist now; wired in their phases.
-        Button(action: {}) {
-            Label(title, systemImage: icon)
-                .font(.custom("Arial", size: 14)).fontWeight(.bold)
-                .foregroundStyle(Color.textMuted)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.borderDark, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .disabled(true)
-        .opacity(0.5)
+    private func actionLabel(_ title: String, icon: String, enabled: Bool) -> some View {
+        Label(title, systemImage: icon)
+            .font(.custom("Arial", size: 14)).fontWeight(.bold)
+            .foregroundStyle(enabled ? Color.gold : Color.textMuted)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(enabled ? Color.gold.opacity(0.5) : Color.borderDark, lineWidth: 1))
+            .opacity(enabled ? 1 : 0.5)
     }
 
     private func copy() {
