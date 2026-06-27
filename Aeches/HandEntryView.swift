@@ -2691,8 +2691,12 @@ private struct ControlBar: View {
                     }
                 }
                 // Primary row — full-width action buttons, the most-used controls in the thumb zone.
-                // Hidden during a run-out: no one can act, so the board just gets dealt to showdown.
-                if isRecording && !isRunOut {
+                // Hidden whenever the Next Street button is pulsing (`nextStreetPulsing` ==
+                // streetClosedDecisively || isRunOut): a decisive street close or a run-out leaves no
+                // seat to act on, so the only valid move is Next Street. (Acting on the resolved last
+                // seat would re-commit it — or a Raise would re-open the closed round.) Fix a mistake
+                // with Undo, which stays live. The bar goes quiet, like the hand-closed state.
+                if isRecording && !nextStreetPulsing {
                     actionButtons
                 }
             }
