@@ -26,6 +26,13 @@ protocol HandStore {
   discard + start empty (no migration code while iterating).
 - **`CloudHandStore`** (later): same protocol, different backend. Nothing above changes.
 
+> **Server-friendly seam (locked).** Consumers always write through the per-hand
+> `SessionStore.saveHand(_:in:)` — never a bulk "save everything" call from a feature. For v1,
+> `FileHandStore` still persists by rewriting the single debounced + atomic JSON (fine at ~8–12
+> hands/session); a future `CloudHandStore` maps that same per-hand intent to one document write with no
+> consumer change. If whole-blob rewrites ever bite, split to one file per session behind the same
+> protocol — still invisible above `HandStore`.
+
 ### `SessionStore: ObservableObject` (single source of truth)
 ```
 @Published private(set) var sessions: [Session]
@@ -56,6 +63,10 @@ func hand(id:) -> Hand?  /  session(id:) -> Session?
 - **`ContentView.swift`** — `RecordTab` resolves `activeSession` through the store.
 - **`HandEntryView.swift`** — write closed hands to the store (replace-by-id); drop `savedHands` as
   the source of truth. Undo-at-close that re-saves must update the same hand id.
+- **`README.md`** — update the **Technical Constraints** section as part of this phase (see Risks): the
+  "no `@EnvironmentObject` / observable context layer" rule is replaced by the `SessionStore` model.
+  Note the protocol seam (`HandStore`) and that recording UI *interaction* state still lives in
+  `HandEntryView` — only the persisted hand data moves to the store.
 
 ## Verification (action-tested)
 
@@ -63,12 +74,20 @@ func hand(id:) -> Hand?  /  session(id:) -> Session?
    (inspect `aeches-store.json`, or a temporary History debug print).
 2. Re-close a hand after an Undo → the stored hand is **updated, not duplicated** (count stays 3).
 3. Create a second session → both persist; `allHands()` returns 4 newest-first.
+4. `README.md` Technical Constraints reflects the new store architecture (no stale "no observable
+   layer" rule).
 
 **Done when:** hands persist across relaunch, saving is debounced + atomic, and re-saving a hand
-replaces by id. No `@State`-local hand storage remains as the source of truth.
+replaces by id. No `@State`-local hand storage remains as the source of truth. The README's
+Technical Constraints section matches the shipped architecture.
 
 ## Risks / notes
 
 - Keep recording behavior identical — this phase changes *where* the hand goes at close, not how it's
   built (Phase 1) or recorded.
 - Debounce must still flush on background/terminate (`scenePhase`) so the last hand isn't lost.
+- **README invariant reversed (intentional).** Adding the app-wide `SessionStore`
+  (`ObservableObject` + `@EnvironmentObject`) contradicts the README's Technical Constraints
+  ("All hand recording state is local to `HandEntryView`… No `@EnvironmentObject` or observable context
+  layer"). That rule predates persistence and can't hold once History reads the same hands. **Update
+  the README's Technical Constraints when this phase lands.**

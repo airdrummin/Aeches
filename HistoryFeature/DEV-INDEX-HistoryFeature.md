@@ -12,12 +12,19 @@ where we are.
 
 ## Locked decisions (from review)
 
+> Second review pass (2026-06-27) added/clarified the **store write path**, **card rank typing**,
+> **edit navigation**, and **verification** rows.
+
 | Decision | Choice | Why |
 |---|---|---|
 | Local store tech | **Codable → JSON behind a `HandStore` protocol** | Keeps the pure-struct models; JSON is inspectable/resettable while testing; cloud sync later is a new protocol conformer, not a rewrite. |
+| Store write path | **Per-hand granular write** (`SessionStore.saveHand`) is the primary path; whole-store save is the debounced cold flush only | Keeps the seam server-friendly — a future cloud conformer maps "save this one hand" to one document write, no consumer change. (v1 file impl still rewrites the single JSON; fine at ~8–12 hands/session.) |
 | Card fidelity | **Fully lossless** — the `CardGroup` becomes the canonical, `Codable` card model | "All details entered must be retrievable." Footnote/relationship/board data is *dropped* today; that ends. |
+| Card rank typing | **`rank` is the `Rank` enum** (suits stay the loose `FrameSuit` + group suit-mode system) | A rank is never fuzzy, so typing it loses nothing and kills `T`-vs-`"10"` drift in the permanent, synced format. Bound/footnote/relationship suit modes are untouched. |
 | Replay style | **Step through streets (tap to advance)** | Deterministic, reuses the per-street renderer, minimal motion work. |
 | Edit model | **Rehydrate the saved `Hand` back into `HandEntryView`** | One recording engine, reused for new + edited hands (DRY). Requires lossless persistence (above). |
+| Edit navigation | **Reuse the single recording screen — no modal.** Entering Edit auto-saves the in-progress live hand Skip-style (resumable via Undo), then loads the hand being edited | One screen; leans on the existing Skip→Undo machinery so an interrupted live hand is preserved, not lost or duplicated. |
+| Losslessness check | **Manual verification** with an "every card mode" hand — no permanent test target | Solo project, verified by hand each phase. Standard check: one hand exercising footnote + relationship + bound + board-suit-count + a villain. |
 
 ---
 
@@ -70,9 +77,14 @@ pure functions of a `Hand`, so recording, History rows, and Replay all render th
 - **DRY.** The same `Hand` is recorded, listed, replayed, and edited. The same renderers draw the
   live table and the replay table. No second implementation of seat visuals or transcript grammar.
 - **Lossless round-trip.** `decode(encode(hand))` re-renders byte-for-byte identical transcript +
-  visuals. This is the acceptance bar for Phase 1 and is re-checked by every later phase.
+  visuals. This is the acceptance bar for Phase 1 and is re-checked by every later phase. **Verified
+  manually** (no test target) using the "every card mode" hand above.
 - **Protocol seam for cloud.** Nothing above `HandStore` knows it's a file. The cloud swap is one
-  new type.
+  new type, reached through the per-hand write path (see the Store-write-path locked decision).
+- **README invariant updated (intentional).** Phase 2 introduces an app-wide `SessionStore`
+  (`ObservableObject` + `@EnvironmentObject`), reversing the README's Technical-Constraints rule
+  ("no observable context layer"). That rule predates persistence and can't hold once History reads
+  the same hands — update the README when Phase 2 lands.
 - **Throwaway dev data.** Local JSON carries a `storeVersion`; on a model change during the build,
   bump it and discard the old file (no migration code while iterating).
 

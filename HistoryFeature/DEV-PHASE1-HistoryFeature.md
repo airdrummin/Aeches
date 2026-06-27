@@ -31,6 +31,12 @@ the flat `[Card]` arrays become *derived* for simple consumers.
 - `CardGroup`, `CardFrame`, and their enums (suit mode, frame-suit state) currently live in
   `HandEntryView.swift`. Move them to `Models.swift`, conform to `Codable` (+ `Equatable` for the
   round-trip test). Keep the live UI referencing the same types — no behavior change, just relocation.
+- **Tighten `CardFrame.rank` from `String?` to `Rank?`** as part of the move (locked decision). Suits
+  stay the loose `FrameSuit` + group suit-mode system — that's what carries footnote/relationship
+  fuzziness, so bound/footnote/relationship are untouched. Convert at the one spot the picker records a
+  rank tap (`rankRow`, `HandEntryView` :2290/:1876 use `"T"` for ten); `groupNotation` (:2577) reads
+  `Rank.rawValue`. A rank is never fuzzy, so nothing is lost and `T`-vs-`"10"` drift in the saved
+  format becomes impossible.
 
 ### `Hand` changes
 Add the canonical groups; keep flat arrays as **computed** derivations (so existing readers/marketplace
@@ -45,18 +51,25 @@ riverGroup:    CardGroup?
 villainGroups: [Int: CardGroup]
 
 // table composition (new)
-tableSize:        Int
+tableSize:           Int
 occupiedSeatIndices: [Int]     // seats with a player — drives positions (was conflated)
-showdownSeatIndices: [Int]     // still-in at the end (hero excluded → villains)
 
 // derived, computed (not stored) — keeps the old [Card] API for simple consumers
 var holeCards: [Card] { holeGroup.asCards }
 var villainCards: [Int: [Card]] { villainGroups.mapValues { $0.asCards } }
 var board: [Card] { (flopGroup + turnGroup + riverGroup).flatMap { $0.asCards } }
+
+// still-in at the end (hero excluded → villains) — DERIVED from the fold log, not stored
+// (honors "don't keep two copies"; Phase 3's slicing helpers compute folds the same way)
+var showdownSeatIndices: [Int] {
+    let folded = Set(streets.flatMap { $0.actions }
+        .filter { $0.actionType == .fold }.map { $0.seatIndex })
+    return occupiedSeatIndices.filter { $0 != heroSeatIndex && !folded.contains($0) }
+}
 ```
 
 - **Retire** the old stored `holeCards`/`villainCards` and the `activeSeatIndices` field (replaced by
-  the two explicit seat sets above).
+  the explicit `occupiedSeatIndices` set above, plus the derived `showdownSeatIndices`).
 - **`Street.boardCards`**: board now lives in the groups, the single source of truth. Make
   `Street.boardCards` either removed from persistence or a derived convenience that reads the matching
   group — do **not** keep two writable copies. (Recommend: drop it from the stored `Street`; if a
@@ -74,14 +87,16 @@ var board: [Card] { (flopGroup + turnGroup + riverGroup).flatMap { $0.asCards } 
 - **`HandEntryView.swift`**
   - Remove the local `CardGroup`/`CardFrame` definitions (now in `Models`).
   - Rewrite `buildHand` to populate the canonical groups (`holeGroup`, `flop/turn/riverGroup`,
-    `villainGroups`), `tableSize`, `occupiedSeatIndices = occupiedSeats`,
-    `showdownSeatIndices = activeSeatSequence`. Street records keep **actions only**.
+    `villainGroups`), `tableSize`, and `occupiedSeatIndices = occupiedSeats`. Street records keep
+    **actions only** (`showdownSeatIndices` is now derived, not written).
   - `buildHeroCards`/`buildVillainCards`/`syncClosedHandCards` either deleted or reduced to writing
     the groups (no flat-card collapse).
 
 ## Verification (action-tested)
 
-A round-trip is the acceptance bar. Suggested temporary `#if DEBUG` harness (removed after):
+A round-trip is the acceptance bar. **Verification is manual** (locked decision — no permanent test
+target); the hand below is the standard "every card mode" check, reused at every later phase. A
+throwaway `#if DEBUG` harness is fine for the one-time Phase-1 check, then delete it:
 1. Record a hand exercising **every** card mode: a **footnote** hole (`AJdx`), a **relationship**
    flop (`Q53tt`), a bound turn (`Jh`), a board-suit-count river (`5ss`), and a villain (`AKs`).
 2. `let data = try JSONEncoder().encode(hand); let back = try JSONDecoder().decode(Hand.self, from: data)`.

@@ -25,6 +25,8 @@ A saved `Hand` (post-Phase 1) now carries everything these need — so extract t
 func seatStates(
     streetActions: [Action],     // the street being rendered
     foldedBefore:  Set<Int>,     // seats folded on earlier streets
+    allIn:         Set<Int>,     // all-in seats — drives the amber ALL IN badge across streets
+    allActions:    [Action],     // every action (all streets) — to recover HOW each seat got all-in
     highlighted:   Int?,         // nil for replay/closed; the cue seat while recording
     owes:          (Int) -> Bool // re-aggression test; constant-false for replay
 ) -> [Int: SeatState]
@@ -32,6 +34,10 @@ func seatStates(
 - Lift the body of `seatActions` verbatim into this function (prior-action histories, bet-level pips,
   fold ghosts, owes-fresh-response demotion). The live computed `seatActions` becomes a thin caller
   that passes its `@State` in. Replay passes the hand's per-street slice with `highlighted: nil`.
+- **Include the all-in badge logic** (`seatActions` :1062–1080). It needs the `allIn` set plus the full
+  `allActions` list to surface the amber badge — with the correct jam symbol (`→`/`↑↑`/`✓`) — on streets
+  where the all-in seat took no action of its own. Live recording passes its `allInSeats` + all actions;
+  Replay derives the all-in set from the hand (sized `All-in` markers) and passes `hand`'s actions.
 
 ### Transcript builder (pure, function of a `Hand`)
 ```
