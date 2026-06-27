@@ -65,9 +65,12 @@ final class SessionStore: ObservableObject {
         return nil
     }
 
-    /// Every hand across every session, newest-first — the History feed.
+    /// Every hand across every session, newest-first — the History feed. Ties on timestamp fall back to
+    /// the higher hand number, so hands recorded in the same instant stay in a stable, sensible order.
     func allHands() -> [Hand] {
-        sessions.flatMap { $0.hands }.sorted { $0.timestamp > $1.timestamp }
+        sessions.flatMap { $0.hands }.sorted {
+            $0.timestamp != $1.timestamp ? $0.timestamp > $1.timestamp : $0.handNumber > $1.handNumber
+        }
     }
 
     // MARK: Persistence

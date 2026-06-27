@@ -92,17 +92,7 @@ struct RecordTab: View {
 }
 
 struct HistoryTab: View {
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.appBackground.ignoresSafeArea()
-                Text("History")
-                    .foregroundStyle(Color.textMuted)
-            }
-            .navigationTitle("History")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
+    var body: some View { HistoryListView() }
 }
 
 struct MarketplaceTab: View {

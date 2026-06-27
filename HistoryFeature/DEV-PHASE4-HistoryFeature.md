@@ -1,6 +1,6 @@
 # Phase 4 — History list UI
 
-**Status:** ⬜ Not started · **Depends on:** Phase 2 (store), Phase 3 (transcript builder)
+**Status:** ✅ Done · **Depends on:** Phase 2 (store), Phase 3 (transcript builder)
 
 ## Goal
 

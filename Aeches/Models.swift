@@ -76,6 +76,23 @@ enum Outcome: String, Codable {
     case chop
 }
 
+/// Hero's outcome for display (the History chip). A superset of `Outcome`: showdowns map straight from
+/// `Outcome`, plus `.folded` (hero mucked — the hand ended or went on without them) and `.incomplete`
+/// (set aside via Skip with hero still contesting). Derived from a `Hand`, never stored.
+enum HandResult {
+    case win, lose, chop, folded, incomplete
+
+    var label: String {
+        switch self {
+        case .win:        return "Won"
+        case .lose:       return "Lost"
+        case .chop:       return "Chop"
+        case .folded:     return "Folded"
+        case .incomplete: return "Incomplete"
+        }
+    }
+}
+
 enum PotUnit: String, Codable {
     case bigBlinds  // display as "BB"
     case dollars    // cash games — display with "$" prefix
@@ -182,21 +199,37 @@ struct Hand: Identifiable, Codable {
     var villainCards: [Int: [Card]] { villainGroups.mapValues { $0.asCards } }
     var board: [Card] { [flopGroup, turnGroup, riverGroup].compactMap { $0 }.flatMap { $0.asCards } }
 
-    /// Seats still in the hand at the end, hero excluded (the showdown villains) — derived from the
-    /// fold log, never stored, so it can't drift from the actions. Folds across every street count.
-    var showdownSeatIndices: [Int] {
-        let folded = Set(streets.flatMap { $0.actions }
-            .filter { $0.actionType == .fold }.map { $0.seatIndex })
-        return occupiedSeatIndices.filter { $0 != heroSeatIndex && !folded.contains($0) }
+    /// Seats that folded at any point this hand (across all streets) — the shared fold-log scan behind
+    /// the derived membership properties below.
+    private var foldedSeatIndices: Set<Int> {
+        Set(streets.flatMap { $0.actions }.filter { $0.actionType == .fold }.map { $0.seatIndex })
     }
+
+    /// Occupied seats still in the hand at the end (hero included) — derived from the fold log, so it
+    /// can't drift from the actions.
+    var stillInSeatIndices: [Int] { occupiedSeatIndices.filter { !foldedSeatIndices.contains($0) } }
+
+    /// Seats still in at the end, hero excluded (the showdown villains).
+    var showdownSeatIndices: [Int] { stillInSeatIndices.filter { $0 != heroSeatIndex } }
 
     /// True when the hand went to a contested end (a showdown / run-out), i.e. ≥2 seats — hero
     /// included — were unfolded at the end. A fold-out leaves exactly one, so it's false. Gates the
     /// villain "shows" lines in the transcript for a saved hand.
-    var reachedShowdown: Bool {
-        let folded = Set(streets.flatMap { $0.actions }
-            .filter { $0.actionType == .fold }.map { $0.seatIndex })
-        return occupiedSeatIndices.filter { !folded.contains($0) }.count >= 2
+    var reachedShowdown: Bool { stillInSeatIndices.count >= 2 }
+
+    /// Hero's result for the History chip — derived, never stored. A showdown maps straight from
+    /// `outcome`; with none recorded, the fold log recovers a fold-out win (hero the sole survivor), a
+    /// fold (hero mucked), or an incomplete hand (Skip with hero still in).
+    var result: HandResult {
+        switch outcome {
+        case .win:  return .win
+        case .lose: return .lose
+        case .chop: return .chop
+        case nil:
+            let stillIn = stillInSeatIndices
+            if !stillIn.contains(heroSeatIndex) { return .folded }   // hero mucked
+            return stillIn.count == 1 ? .win : .incomplete           // sole survivor vs set aside
+        }
     }
 }
 

@@ -66,7 +66,7 @@ Bottom tab bar with 4 tabs:
 
 Pro-specific screens live inside the Profile tab — standard users and pros share the same tab bar.
 
-History, Marketplace, and Profile are placeholder stubs. Record is fully implemented.
+Marketplace and Profile are placeholder stubs. Record is fully implemented; History lists every recorded hand (newest-first) and opens a per-hand detail hub (Replay/Edit land in later phases).
 
 ---
 
@@ -360,11 +360,12 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 - Villain cards — at showdown, the still-in villains' hole cards are entered in the card strip (appended right of RIVER, horizontally scrollable, with a peek-nudge and a **red** "enter now" cue on their empty slots) via the same hole-card picker; persisted to `Hand.villainCards` and rendered as `CO shows AQs.` transcript lines (see Villain Cards)
 - New Session screen (Cash / Tournament)
 - Login screen (auth buttons wired to state, full auth not yet implemented)
+- History tab — store-driven list of every recorded hand (newest-first), each row showing hand #/session, hero position + hole, a derived outcome chip (Won/Lost/Chop/Folded/Incomplete, recovered from the fold log when no showdown outcome was recorded), and a one-line shorthand snippet; taps open a per-hand `HandDetailView` hub with the full transcript (Copy) and present-but-stubbed Replay/Edit buttons (wired in Phases 5/6). Purely store-driven via the Phase 3 pure renderers — `History/HistoryListView.swift`, `History/HandDetailView.swift`
 
 ### Remaining for v1.0
 - Villain profiles with session persistence and swipe-to-bust (tags, descriptor, notes)
 - Full auth: Sign in with Apple, Google, Email + Password
-- Personal hand history screen (History tab)
+- Hand **Replay** (read-only step-through) and **Edit** (rehydrate into the recorder) — the History detail hub's two buttons are stubbed until these land (Phases 5/6)
 - Pro profiles with Live and Past sections
 - Open self-serve Pro marketplace
 - Twitter/X verification + verified badge
@@ -422,6 +423,9 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 | `Aeches/AechesApp.swift` | App entry point, auth gate, owns + injects `SessionStore`, flushes on background |
 | `Aeches/Persistence/SessionStore.swift` | `ObservableObject` single source of truth — session/hand CRUD (`upsertSession`, `saveHand` upsert-by-id, `allHands`, `hand(id:)`) over an injected `HandStore` |
 | `Aeches/Persistence/HandStore.swift` | The cloud seam: `HandStore` protocol + `FileHandStore` (atomic, debounced JSON) + `InMemoryHandStore` |
+| `Aeches/Rendering/HandRendering.swift` | Pure renderers — `seatStates(...)`, `transcript(for:)`, `groupNotation(_:)`, `deadCardKeys(in:)`, `normalizingUnsuited(_:keepsTexture:)`. Functions of a `Hand`/`CardGroup`, shared by recording, History, and Replay |
+| `Aeches/History/HistoryListView.swift` | History tab — store-driven list of every hand (newest-first) + row + outcome `ResultChip` |
+| `Aeches/History/HandDetailView.swift` | Per-hand detail hub — full transcript (Copy) + Replay/Edit entry points |
 | `Aeches/Rendering/HandRendering.swift` | Pure renderers — `seatStates(...)` (table visuals) and `transcript(...)` (shorthand) as functions of hand data, plus `groupNotation(_:)`. Recording, History, and Replay all draw through these (`HandEntryView` calls them as thin wrappers) |
 
 ---
