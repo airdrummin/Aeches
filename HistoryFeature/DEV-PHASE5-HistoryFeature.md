@@ -15,8 +15,10 @@ The user wants to re-watch a hand as it played. We already have the dumb table c
 ## Design
 
 ### `ReplayView(hand: Hand)`
-- **State:** `@State private var streetIndex` over the streets the hand reached
-  (Preflop → Flop → Turn → River → Showdown), clamped to what exists.
+- **State:** `@State private var index` over a flat list of **per-action frames** (shipped revision of
+  the original street-granular plan — street-only read like screenshots). Each street walks deal →
+  action 1 → … → all (the deriver is fed an action *prefix*), then a final Showdown beat. **Preflop
+  pure open-folds are elided** (no step) via `replayStops(for:in:)`, mirroring the transcript.
 - **Table:** `TableOvalView` fed by `seatStates(streetActions: actions(on: street), foldedBefore:
   foldedBefore(street), highlighted: nil, owes: { _ in false })`. Dealer button, positions (now correct
   via `occupiedSeatIndices`), and empty seats (from `hand.tableSize` + persisted empties) all render
