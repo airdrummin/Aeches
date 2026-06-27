@@ -1727,6 +1727,8 @@ struct HandEntryView: View {
         // texture. (bound / uniform-footnote stay on the faces; none → no pill.) See DisplayLayoutPlan.md.
         let glyphSet: [String]? = (g.mode == .footnote && footnoteSuit == nil) ? footnoteGlyphs(g) : nil
         let relWord: String? = (g.mode == .relationship) ? relationshipWord(g.relationship) : nil
+        // Villain "enter now" cues are red to distinguish them from the hero's gold board/hole cues.
+        let cueColor: Color = { if case .villain = target { return .foldRed } else { return .gold } }()
         let faceDown = incognito && target == .street(.hole)   // incognito hides only the hero's hole faces
         // In incognito the hole's caption is the single read-out (the pill is omitted, below). The caption
         // blurs whenever the hole bank isn't selected, and clears again when you re-select your cards.
@@ -1748,7 +1750,8 @@ struct HandEntryView: View {
                         suitRun: g.suitRun,   // turn/river board count → repeated pips (1 elsewhere)
                         faceDown: faceDown,
                         isActive: entryTarget == target && focusIndex == i,
-                        promptEmpty: promptCardEntry(for: target)
+                        promptEmpty: promptCardEntry(for: target),
+                        promptColor: cueColor
                     )
                     .onTapGesture { openCardEntry(target) }
                 }
@@ -3396,7 +3399,8 @@ struct CardFrameView: View {
     var suitRun: Int = 1              // turn/river: draw the suit pip this many times (board count)
     var faceDown: Bool = false        // incognito: a filled hole card shows its back instead of the face
     let isActive: Bool
-    var promptEmpty: Bool = false     // showdown/closed: gold "enter this now" border on an empty slot
+    var promptEmpty: Bool = false     // showdown/closed: "enter this now" border on an empty slot
+    var promptColor: Color = .gold    // color of that cue border — red for villain groups, gold for hero
 
     var body: some View {
         // Incognito: a filled card shows the back. Empty slots stay as the "?" placeholder (no card to hide).
@@ -3454,11 +3458,12 @@ struct CardFrameView: View {
         .frame(width: 40, height: 40)
     }
 
-    /// Border: gold when focused (active) or when an empty slot is being prompted for entry
-    /// (showdown/closed); a faint outline for a plain empty slot; invisible for a filled face.
+    /// Border: gold when focused (active); the cue color (gold for hero, red for villains) when an empty
+    /// slot is being prompted for entry (showdown/closed); a faint outline for a plain empty slot;
+    /// invisible for a filled face.
     private var strokeColor: Color {
         if isActive { return Color.gold }
-        if frame.isEmpty { return promptEmpty ? Color.gold : Color.borderDark.opacity(0.5) }
+        if frame.isEmpty { return promptEmpty ? promptColor : Color.borderDark.opacity(0.5) }
         return Color.clear
     }
 
