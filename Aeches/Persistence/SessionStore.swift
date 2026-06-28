@@ -72,6 +72,26 @@ final class SessionStore: ObservableObject {
         return nil
     }
 
+    /// Delete one hand by id from its session. No renumber — remaining hands keep their recorded
+    /// `handNumber` (gaps are fine; the number is a display ordinal, `Hand.id` is the durable key).
+    func deleteHand(_ id: UUID, in sessionId: UUID) {
+        guard let si = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        sessions[si].hands.removeAll { $0.id == id }
+        persist()
+    }
+
+    /// Delete a whole session and all its hands.
+    func deleteSession(_ id: UUID) {
+        sessions.removeAll { $0.id == id }
+        persist()
+    }
+
+    /// The next hand number for a session — one past its highest existing (1 if empty). Seeds the
+    /// recorder so numbering is per-session and continues across relaunch / resume.
+    func nextHandNumber(in sessionId: UUID) -> Int {
+        ((session(id: sessionId)?.hands.map(\.handNumber).max()) ?? 0) + 1
+    }
+
     /// Every hand across every session, newest-first — the History feed. Ties on timestamp fall back to
     /// the higher hand number, so hands recorded in the same instant stay in a stable, sensible order.
     func allHands() -> [Hand] {

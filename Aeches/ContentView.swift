@@ -79,23 +79,40 @@ struct RecordTab: View {
             }
             .navigationBarHidden(true)
         }
+        // If the active session is deleted from History, drop it so the recorder doesn't write into a
+        // ghost. (Compares ids — [Session] isn't Equatable.)
+        .onChange(of: store.sessions.map(\.id)) { _, _ in
+            guard let s = activeSession, store.session(id: s.id) == nil else { return }
+            activeSession = nil
+            #if DEBUG
+            let today = Self.todaysSession(in: store)
+            store.upsertSession(today)
+            activeSession = today
+            #endif
+        }
         #if DEBUG
-        // Dev convenience: boot straight into recording on a single, stable session (fixed id) so
-        // hands accumulate and persist across relaunch instead of spawning a fresh session each launch.
+        // Dev scaffold (removed with the real session/auth flow): boot into TODAY's session — find one
+        // dated today, else create one named for the date. New hands continue the day's numbering; a new
+        // calendar day starts a new session group. (Back → New Session still makes extra groups.)
         .onAppear {
             guard activeSession == nil else { return }
-            let dev = store.session(id: Self.devSessionID) ?? Self.makeDevSession()
-            store.upsertSession(dev)
-            activeSession = dev
+            let today = Self.todaysSession(in: store)
+            store.upsertSession(today)
+            activeSession = today
         }
         #endif
     }
 
     #if DEBUG
-    private static let devSessionID = UUID(uuidString: "00000000-0000-0000-0000-0000000000DE")!
-    private static func makeDevSession() -> Session {
-        Session(id: devSessionID, type: .cash, name: "Dev Session", date: Date(),
-                tableSize: 9, heroSeatIndex: 0, stakes: "2/5")
+    private static func todaysSession(in store: SessionStore) -> Session {
+        if let existing = store.sessions.first(where: { Calendar.current.isDateInToday($0.date) }) {
+            return existing
+        }
+        return Session(type: .cash, name: todayName, date: Date(), tableSize: 9, heroSeatIndex: 0)
+    }
+    private static var todayName: String {
+        let f = DateFormatter(); f.dateFormat = "EEE, MMM d"   // e.g. "Sat, Jun 28"
+        return f.string(from: Date())
     }
     #endif
 }

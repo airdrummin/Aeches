@@ -1,38 +1,129 @@
 import SwiftUI
 
-/// The History tab: every recorded hand, newest-first, each row tappable into `HandDetailView`.
-/// Purely store-driven — no live recording `@State` is read; a `Hand` renders itself via the Phase 3
-/// pure functions (`transcript(for:)`, `groupNotation`) and its derived `result`.
+/// The History tab: a session-grouped accordion. Each session is an expandable header; its hands sit
+/// underneath in session order. Hands delete (swipe) / edit / resume (via the detail hub); sessions
+/// delete or rename (header menu). Purely store-driven — a `Hand` renders itself via the Phase 3 pure
+/// functions and its derived `result`.
 struct HistoryListView: View {
     @EnvironmentObject private var store: SessionStore
+
+    @State private var collapsed: Set<UUID> = []                       // expanded by default; tap to collapse
+    @State private var editingSession: Session? = nil                 // rename sheet
+    @State private var pendingHandDelete: (id: UUID, session: UUID)? = nil
+    @State private var pendingSessionDelete: Session? = nil
+
+    private var sessions: [Session] {
+        store.sessions.sorted { $0.date != $1.date ? $0.date > $1.date : $0.startedAt > $1.startedAt }
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.appBackground.ignoresSafeArea()
-                let hands = store.allHands()
-                if hands.isEmpty {
+                if store.sessions.isEmpty {
                     emptyState
                 } else {
                     List {
-                        ForEach(hands) { hand in
-                            NavigationLink(value: hand.id) {
-                                HistoryRow(hand: hand, sessionName: store.session(id: hand.sessionId)?.name)
-                            }
-                            .listRowBackground(Color.surface)
-                            .listRowSeparatorTint(Color.borderDark)
-                        }
+                        ForEach(sessions) { session in sessionSection(session) }
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
-                    .navigationDestination(for: UUID.self) { id in
-                        HandDetailView(handID: id)
-                    }
+                    .navigationDestination(for: UUID.self) { id in HandDetailView(handID: id) }
                 }
             }
             .navigationTitle("History")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $editingSession) { s in
+                NavigationStack {
+                    NewSessionView(
+                        existing: s,
+                        onSessionCreated: { store.upsertSession($0); editingSession = nil },
+                        onBack: { editingSession = nil }
+                    )
+                }
+            }
+            .confirmationDialog("Delete this hand?",
+                                isPresented: bool($pendingHandDelete), titleVisibility: .visible) {
+                Button("Delete Hand", role: .destructive) {
+                    if let p = pendingHandDelete { store.deleteHand(p.id, in: p.session) }
+                    pendingHandDelete = nil
+                }
+                Button("Cancel", role: .cancel) { pendingHandDelete = nil }
+            }
+            .confirmationDialog("Delete this session?",
+                                isPresented: bool($pendingSessionDelete), titleVisibility: .visible) {
+                Button("Delete Session", role: .destructive) {
+                    if let s = pendingSessionDelete { store.deleteSession(s.id) }
+                    pendingSessionDelete = nil
+                }
+                Button("Cancel", role: .cancel) { pendingSessionDelete = nil }
+            } message: {
+                if let s = pendingSessionDelete {
+                    Text("Deletes \u{201C}\(s.name)\u{201D} and its \(s.hands.count) hand\(s.hands.count == 1 ? "" : "s").")
+                }
+            }
         }
+    }
+
+    // MARK: Session section (accordion)
+
+    @ViewBuilder
+    private func sessionSection(_ session: Session) -> some View {
+        let hands = session.hands.sorted { $0.handNumber < $1.handNumber }
+        DisclosureGroup(isExpanded: expansion(session.id)) {
+            if hands.isEmpty {
+                Text("No hands yet")
+                    .font(.custom("Arial", size: 12)).foregroundStyle(Color.textMuted)
+                    .listRowBackground(Color.surface)
+            } else {
+                ForEach(hands) { hand in
+                    NavigationLink(value: hand.id) { HistoryRow(hand: hand, sessionName: nil) }
+                        .listRowBackground(Color.surface)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                pendingHandDelete = (hand.id, session.id)
+                            } label: { Label("Delete", systemImage: "trash") }
+                        }
+                }
+            }
+        } label: {
+            sessionHeader(session)
+        }
+        .tint(Color.gold)
+        .listRowBackground(Color.surface)
+    }
+
+    private func sessionHeader(_ session: Session) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.name)
+                    .font(.custom("Georgia", size: 16)).foregroundStyle(Color.textBody)
+                Text("\(session.type == .cash ? "Cash" : "Tournament") · \(session.hands.count) hand\(session.hands.count == 1 ? "" : "s")")
+                    .font(.custom("Arial", size: 11)).foregroundStyle(Color.textMuted)
+            }
+            Spacer()
+            Menu {
+                Button { editingSession = session } label: { Label("Edit details", systemImage: "pencil") }
+                Button(role: .destructive) { pendingSessionDelete = session } label: { Label("Delete session", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.textMuted)
+                    .padding(.vertical, 6).padding(.leading, 10)
+            }
+        }
+    }
+
+    private func expansion(_ id: UUID) -> Binding<Bool> {
+        Binding(get: { !collapsed.contains(id) },
+                set: { isExpanded in
+                    if isExpanded { collapsed.remove(id) } else { collapsed.insert(id) }
+                })
+    }
+
+    /// A `Bool` binding that's true while an optional is set, and clears it when dismissed.
+    private func bool<T>(_ opt: Binding<T?>) -> Binding<Bool> {
+        Binding(get: { opt.wrappedValue != nil }, set: { if !$0 { opt.wrappedValue = nil } })
     }
 
     private var emptyState: some View {

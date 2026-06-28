@@ -1,22 +1,38 @@
 import SwiftUI
 
 struct NewSessionView: View {
+    /// Non-nil = **edit mode**: pre-fill from this session and save back over it (same id, hands kept).
+    var existing: Session? = nil
     var onSessionCreated: (Session) -> Void
     var onBack: (() -> Void)? = nil
 
-    @State private var selectedType: SessionType? = nil
+    @State private var selectedType: SessionType?
 
     // Cash fields
-    @State private var cashName       = ""
-    @State private var stakes         = ""
-    @State private var startingStack  = ""
+    @State private var cashName: String
+    @State private var stakes: String
+    @State private var startingStack: String
 
     // Tournament fields
-    @State private var tourneyName    = ""
-    @State private var buyIn          = ""
-    @State private var bullet         = 1
+    @State private var tourneyName: String
+    @State private var buyIn: String
+    @State private var bullet: Int
 
-    @State private var sessionDate    = Date()
+    @State private var sessionDate: Date
+
+    init(existing: Session? = nil, onSessionCreated: @escaping (Session) -> Void, onBack: (() -> Void)? = nil) {
+        self.existing = existing
+        self.onSessionCreated = onSessionCreated
+        self.onBack = onBack
+        _selectedType  = State(initialValue: existing?.type)
+        _cashName      = State(initialValue: existing?.type == .cash ? (existing?.name ?? "") : "")
+        _stakes        = State(initialValue: existing?.stakes ?? "")
+        _startingStack = State(initialValue: existing?.startingStack.map { String(Int($0)) } ?? "")
+        _tourneyName   = State(initialValue: existing?.type == .tournament ? (existing?.name ?? "") : "")
+        _buyIn         = State(initialValue: existing?.buyIn.map { String(Int($0)) } ?? "")
+        _bullet        = State(initialValue: existing?.bullet ?? 1)
+        _sessionDate   = State(initialValue: existing?.date ?? Date())
+    }
 
     private var canContinue: Bool {
         switch selectedType {
@@ -49,10 +65,10 @@ struct NewSessionView: View {
 
                     // ── Header ────────────────────────────────────────
                     VStack(spacing: 6) {
-                        Text("New Session")
+                        Text(existing == nil ? "New Session" : "Edit Session")
                             .font(.custom("Georgia", size: 26))
                             .foregroundStyle(Color.textBody)
-                        Text("Select a session type to begin")
+                        Text(existing == nil ? "Select a session type to begin" : "Update the session details")
                             .font(.custom("Arial", size: 14))
                             .foregroundStyle(Color.textMuted)
                     }
@@ -114,7 +130,7 @@ struct NewSessionView: View {
                     // ── Continue Button ───────────────────────────────
                     if selectedType != nil {
                         Button(action: createSession) {
-                            Text("Continue →")
+                            Text(existing == nil ? "Continue →" : "Save")
                                 .font(.custom("Arial", size: 17))
                                 .fontWeight(.bold)
                                 .frame(maxWidth: .infinity)
@@ -141,19 +157,23 @@ struct NewSessionView: View {
 
     private func createSession() {
         guard let type = selectedType else { return }
+        let name          = type == .cash ? (cashName.isEmpty ? "Cash Game" : cashName) : tourneyName
+        let stakesVal     = type == .cash ? (stakes.isEmpty ? nil : stakes) : nil
+        let buyInVal      = type == .tournament ? Double(buyIn.replacingOccurrences(of: ",", with: "")) : nil
+        let bulletVal     = type == .tournament ? bullet : nil
+        let startStackVal = type == .cash ? Double(startingStack.replacingOccurrences(of: ",", with: "")) : nil
 
-        let session = Session(
-            type: type,
-            name: type == .cash ? (cashName.isEmpty ? "Cash Game" : cashName) : tourneyName,
-            date: sessionDate,
-            tableSize: 9,
-            heroSeatIndex: 0,
-            stakes:        type == .cash ? (stakes.isEmpty ? nil : stakes) : nil,
-            buyIn:         type == .tournament ? Double(buyIn.replacingOccurrences(of: ",", with: "")) : nil,
-            bullet:        type == .tournament ? bullet : nil,
-            startingStack: type == .cash ? Double(startingStack.replacingOccurrences(of: ",", with: "")) : nil
-        )
-        onSessionCreated(session)
+        if var s = existing {
+            // Edit: keep id, hands, hero seat, table size, timestamps — update only the detail fields.
+            s.type = type; s.name = name; s.date = sessionDate
+            s.stakes = stakesVal; s.buyIn = buyInVal; s.bullet = bulletVal; s.startingStack = startStackVal
+            onSessionCreated(s)
+        } else {
+            onSessionCreated(Session(
+                type: type, name: name, date: sessionDate, tableSize: 9, heroSeatIndex: 0,
+                stakes: stakesVal, buyIn: buyInVal, bullet: bulletVal, startingStack: startStackVal
+            ))
+        }
     }
 }
 

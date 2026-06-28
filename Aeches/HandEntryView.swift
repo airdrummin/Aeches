@@ -41,6 +41,8 @@ struct HandEntryView: View {
     /// True while editing/resuming a hand opened from History — swaps the nav "Back" for "Done" (save +
     /// return to History). Set in `beginEdit`, cleared in `resetHandState`.
     @State private var isEditing: Bool = false
+    /// Seed the first hand number from the session once (per-session numbering continues across relaunch).
+    @State private var didSeedNumber: Bool = false
 
     // Hero seat — locked for the session
     @State private var heroSeat: Int? = nil
@@ -529,8 +531,12 @@ struct HandEntryView: View {
             store.editingHandID = nil
         }
         .onAppear {
+            if !didSeedNumber {                                  // continue this session's numbering
+                didSeedNumber = true
+                handNumber = store.nextHandNumber(in: session.id)
+            }
             if let id = store.editingHandID, let hand = store.hand(id: id) {
-                beginEdit(hand)
+                beginEdit(hand)                                  // rehydrate overrides handNumber as needed
                 store.editingHandID = nil
             }
         }
