@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject private var store: SessionStore
     @State private var activeTab: Tab = .record
 
     enum Tab {
@@ -39,6 +40,14 @@ struct ContentView: View {
         }
         .tint(Color.gold)
         .preferredColorScheme(.dark)
+        // Edit/Resume from History: jump to the Record tab so the (always-mounted) recorder handles it.
+        .onChange(of: store.editingHandID) { _, id in
+            if id != nil { activeTab = .record }
+        }
+        // "Done" at the end of an edit/resume returns to History.
+        .onChange(of: store.jumpToHistory) { _, jump in
+            if jump { activeTab = .history; store.jumpToHistory = false }
+        }
     }
 }
 

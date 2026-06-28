@@ -1,6 +1,6 @@
 # Phase 6 — Edit (rehydrate + write-back) + resume skipped hands
 
-**Status:** ⬜ Not started · **Depends on:** Phase 2 (store), Phase 5 (renderers proven end-to-end)
+**Status:** ✅ Done · **Depends on:** Phase 2 (store), Phase 5 (renderers proven end-to-end)
 
 ## Goal
 
@@ -75,6 +75,13 @@ hero-fold-then-skip is indistinguishable from a real villain showdown. So store 
   `HandEntryView` observes it, auto-saves its current live hand Skip-style (existing `skipHand`, only if
   a live hand is in progress), `rehydrate(from: store.hand(id:))`s the target, then clears
   `editingHandID`. On close it saves back by id; the auto-skipped live hand remains in History.
+- **Exit via "Done".** While editing/resuming (`isEditing`), the nav "Back" becomes **Done**: it flushes
+  an open card picker, saves on the way out — an unfinished (still-live) hand persists Skip-style
+  (incomplete, **resumable again**); a closed hand is already saved — resets the recorder to a fresh
+  hand for the live session (next `handNumber`), and returns to the **History tab** (`store.jumpToHistory`
+  → `ContentView`). So you never silently lose progress and never land on the New Session screen.
+- **`HandDetailView` resolves the hand from the store by id** (not a captured snapshot), so returning
+  after an edit shows the updated hand, not stale data.
 - **Release cold-start deferred:** in DEBUG the dev-session `HandEntryView` is always mounted, so this
   works in place. The case where `activeSession == nil` (a shipped app opened to just History, recorder
   not mounted) is handled when the real session/auth flow lands (pairs with Phase 7).

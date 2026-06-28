@@ -360,13 +360,14 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 - Villain cards — at showdown, the still-in villains' hole cards are entered in the card strip (appended right of RIVER, horizontally scrollable, with a peek-nudge and a **red** "enter now" cue on their empty slots) via the same hole-card picker; persisted to `Hand.villainCards` and rendered as `CO shows AQs.` transcript lines (see Villain Cards)
 - New Session screen (Cash / Tournament)
 - Login screen (auth buttons wired to state, full auth not yet implemented)
-- History tab — store-driven list of every recorded hand (newest-first), each row showing hand #/session, hero position + hole, a derived outcome chip (Won/Lost/Chop/Folded/Incomplete, recovered from the fold log when no showdown outcome was recorded), and a one-line shorthand snippet; taps open a per-hand `HandDetailView` hub with the full transcript (Copy), a wired **Replay** button, and a stubbed Edit button (Phase 6). Purely store-driven via the Phase 3 pure renderers — `History/HistoryListView.swift`, `History/HandDetailView.swift`
+- History tab — store-driven list of every recorded hand (newest-first), each row showing hand #/session, hero position + hole, a derived outcome chip (Won/Lost/Chop/Folded/Incomplete, recovered from the fold log when no showdown outcome was recorded), and a one-line shorthand snippet; taps open a per-hand `HandDetailView` hub with the full transcript (Copy), a **Replay** button, and an **Edit** button (which reads **Resume** for an incomplete/skipped hand). Purely store-driven via the Phase 3 pure renderers — `History/HistoryListView.swift`, `History/HandDetailView.swift`
 - Replay — read-only step-through of any saved hand (`Replay/ReplayView.swift`): the real racetrack table, progressively-revealed board + villain cards, and the shorthand transcript, advanced one street at a time (Prev/Next), with the outcome on the felt at showdown. Rendered entirely from the stored `Hand` through the Phase 3 pure functions; no engine, no seat gestures, no picker — recording and replay share the same lossless card rendering (`ReplayCardGroup` reuses `CardFrameView`/`CardTextureBadge` + the pure caption/face helpers)
+- Edit / Resume — reopen a saved hand in the **real recording screen** via `rehydrate(from:)` (the inverse of `buildHand`, leaning on `recomputeDerivedState`). A **completed** hand lands on the frozen summary to revise (Undo / showdown overlay); a **skipped** hand (stored `Hand.isComplete == false`) reopens **live** at the cue to finish it. Saves back over the same hand by id into its own session (`currentHandID` + `currentSessionID`), so no duplicate. Entry: `HandDetailView` sets `store.editingHandID` → `ContentView` switches to the Record tab → `HandEntryView` auto-saves any live hand Skip-style, then rehydrates. Exit: a **Done** button (the nav "Back" while editing) saves on the way out — an unfinished hand persists as incomplete (resumable again) — and returns to the **History tab**; `HandDetailView` resolves the hand live by id so the update shows. (Release cold-start — recorder not yet mounted — lands with the session/auth flow.)
 
 ### Remaining for v1.0
 - Villain profiles with session persistence and swipe-to-bust (tags, descriptor, notes)
 - Full auth: Sign in with Apple, Google, Email + Password
-- Hand **Edit** (rehydrate a saved hand into the recorder) — the History detail hub's Edit button is stubbed until this lands (Phase 6)
+- **Session-grouped History** — group hands under their session as headers (per-session hand numbering) and reopen a past session to add hands. Pairs with the real session/auth flow (Phase 7)
 - Pro profiles with Live and Past sections
 - Open self-serve Pro marketplace
 - Twitter/X verification + verified badge
@@ -415,14 +416,14 @@ Capture the cards of villains who reach a showdown — recorded entirely in the 
 
 | File | Purpose |
 |---|---|
-| `Aeches/HandEntryView.swift` | Full hand recording engine, two-row Control Bar (Undo · actions · Next Street), per-street card picker, shorthand transcript, all phase logic |
+| `Aeches/HandEntryView.swift` | Full hand recording engine, two-row Control Bar (Undo · actions · Next Street), per-street card picker, shorthand transcript, all phase logic; also Edit/Resume rehydration (`rehydrate(from:)`, the inverse of `buildHand`) |
 | `Aeches/SeatSelectionView.swift` | Shared components only: `TableOvalView`, `SeatButtonView`, `SeatState`, `seatPosition()` |
 | `Aeches/Models.swift` | All data models and enums. `calculatePositions()` + `positionLabels(for:)` are the single source of truth for position labels (the only thing here intended to change — and only the label convention). Otherwise treat as stable. |
 | `Aeches/ContentView.swift` | Tab bar, `RecordTab` (resolves the active session through the store), design tokens (`Color` extensions) |
 | `Aeches/NewSessionView.swift` | Session creation screen |
 | `Aeches/LoginView.swift` | Auth screen |
 | `Aeches/AechesApp.swift` | App entry point, auth gate, owns + injects `SessionStore`, flushes on background |
-| `Aeches/Persistence/SessionStore.swift` | `ObservableObject` single source of truth — session/hand CRUD (`upsertSession`, `saveHand` upsert-by-id, `allHands`, `hand(id:)`) over an injected `HandStore` |
+| `Aeches/Persistence/SessionStore.swift` | `ObservableObject` single source of truth — session/hand CRUD (`upsertSession`, `saveHand` upsert-by-id, `allHands`, `hand(id:)`) over an injected `HandStore`; `editingHandID` is the Edit/Resume request slot |
 | `Aeches/Persistence/HandStore.swift` | The cloud seam: `HandStore` protocol + `FileHandStore` (atomic, debounced JSON) + `InMemoryHandStore` |
 | `Aeches/Rendering/HandRendering.swift` | Pure renderers — `seatStates(...)`, `transcript(for:)`, `groupNotation(_:)`, `deadCardKeys(in:)`, `normalizingUnsuited(_:keepsTexture:)`, per-street slicing (`actions(on:in:)`, `foldedBefore(street:in:)`), and card-display helpers (`faceFrame`, `uniformFootnoteSuit`, `footnoteGlyphs`, `relationshipWord`). Functions of a `Hand`/`CardGroup`, shared by recording, History, and Replay |
 | `Aeches/History/HistoryListView.swift` | History tab — store-driven list of every hand (newest-first) + row + outcome `ResultChip` |
@@ -544,6 +545,7 @@ villainGroups: [Int: CardGroup] // seatIndex → that villain's shown cards; sho
 
 streets:        [Street]   // only streets that were played (actions only — no board)
 lastStreet:     StreetName // furthest street reached (currentStreet at close) — the transcript/replay read-out bound; not recoverable from streets (run-out skips river, fold-out may carry a stray card)
+isComplete:     Bool       // true = played to a real close (showdown/fold-out); false = set aside via Skip (resumable). Drives `result` + resume-vs-edit; stored because outcome==nil is ambiguous
 outcome:        Outcome?   // nil if hand abandoned or outcome not recorded
 potSize:        Double?
 potUnit:        PotUnit?

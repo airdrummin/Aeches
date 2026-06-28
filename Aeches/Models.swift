@@ -188,6 +188,11 @@ struct Hand: Identifiable, Codable {
     /// the `river` at all, and a fold-out can carry a stray later-street card from post-hoc entry.
     /// This is the transcript/replay upper bound — how far the board is read out.
     var lastStreet:       StreetName = .preflop
+    /// Whether the hand was played to a real close (showdown / fold-out) vs. set aside via Skip. Stored,
+    /// not inferred: `outcome == nil` is ambiguous (a finished fold-out and a skipped hand both have it,
+    /// and a hero-fold-then-skip looks like a villain showdown). Drives `result` (incomplete) and lets a
+    /// skipped hand be resumed and finished (Phase 6). Skip sets `false`; every real close sets `true`.
+    var isComplete:       Bool = true
     var outcome:          Outcome?
     var potSize:          Double?
     var potUnit:          PotUnit?
@@ -221,14 +226,14 @@ struct Hand: Identifiable, Codable {
     /// `outcome`; with none recorded, the fold log recovers a fold-out win (hero the sole survivor), a
     /// fold (hero mucked), or an incomplete hand (Skip with hero still in).
     var result: HandResult {
+        guard isComplete else { return .incomplete }   // set aside via Skip — authoritative, not inferred
         switch outcome {
         case .win:  return .win
         case .lose: return .lose
         case .chop: return .chop
         case nil:
-            let stillIn = stillInSeatIndices
-            if !stillIn.contains(heroSeatIndex) { return .folded }   // hero mucked
-            return stillIn.count == 1 ? .win : .incomplete           // sole survivor vs set aside
+            // Complete with no recorded outcome → a fold-out (hero the sole survivor) or hero mucked.
+            return stillInSeatIndices == [heroSeatIndex] ? .win : .folded
         }
     }
 }

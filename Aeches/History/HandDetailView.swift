@@ -1,9 +1,22 @@
 import SwiftUI
 
-/// The per-hand hub reached from History. Shows the full, read-only transcript (rendered from the
-/// stored `Hand` via the Phase 3 pure builder) and is the launch point for the two hand actions.
-/// Replay (Phase 5) and Edit (Phase 6) are present-but-stubbed so the navigation is in place now.
+/// The per-hand hub reached from History — full read-only transcript + the Replay / Edit-or-Resume
+/// actions. Resolves the hand from the store by **id** so it stays live: after an Edit/Resume writes
+/// back, returning here shows the updated hand (not the stale snapshot captured at push time).
 struct HandDetailView: View {
+    let handID: UUID
+    @EnvironmentObject private var store: SessionStore
+
+    var body: some View {
+        if let hand = store.hand(id: handID) {
+            HandDetailContent(hand: hand)
+        } else {
+            ZStack { Color.appBackground.ignoresSafeArea() }   // hand removed
+        }
+    }
+}
+
+private struct HandDetailContent: View {
     let hand: Hand
     @EnvironmentObject private var store: SessionStore
     @State private var copied = false
@@ -101,7 +114,14 @@ struct HandDetailView: View {
                 actionLabel("Replay", icon: "play.fill", enabled: true)
             }
             .buttonStyle(.plain)
-            actionLabel("Edit", icon: "pencil", enabled: false)   // → recorder in edit mode (Phase 6)
+            // Edit a completed hand (frozen summary) / Resume a skipped one (live). Routes to the Record
+            // tab via the store; the recorder auto-skips its live hand, then rehydrates this one.
+            Button { store.editingHandID = hand.id } label: {
+                actionLabel(hand.isComplete ? "Edit" : "Resume",
+                            icon: hand.isComplete ? "pencil" : "play.circle",
+                            enabled: true)
+            }
+            .buttonStyle(.plain)
         }
     }
 

@@ -65,7 +65,7 @@ pure functions of a `Hand`, so recording, History rows, and Replay all render th
 | 3 | Pure renderers (seat deriver + transcript builder) | ✅ Done | 1 | [DEV-PHASE3-HistoryFeature.md](DEV-PHASE3-HistoryFeature.md) |
 | 4 | History list UI | ✅ Done | 2, 3 | [DEV-PHASE4-HistoryFeature.md](DEV-PHASE4-HistoryFeature.md) |
 | 5 | Replay (read-only, step-through) | ✅ Done | 3, 4 | [DEV-PHASE5-HistoryFeature.md](DEV-PHASE5-HistoryFeature.md) |
-| 6 | Edit (rehydrate + write-back) + resume skipped hands | ⬜ Not started | 2, 5 | [DEV-PHASE6-HistoryFeature.md](DEV-PHASE6-HistoryFeature.md) |
+| 6 | Edit (rehydrate + write-back) + resume skipped hands | ✅ Done | 2, 5 | [DEV-PHASE6-HistoryFeature.md](DEV-PHASE6-HistoryFeature.md) |
 | 7 | Session-grouped History (+ resume a session) | ⬜ Not started | 4, 6, session/auth flow | [DEV-PHASE7-HistoryFeature.md](DEV-PHASE7-HistoryFeature.md) |
 
 **Status legend:** ⬜ Not started · 🟡 In progress · 🔵 In review/testing · ✅ Done

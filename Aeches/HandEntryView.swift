@@ -31,6 +31,16 @@ struct HandEntryView: View {
     /// The closed hand's outcome, set at each close — lets post-close edits rebuild via `buildHand`
     /// without reading a saved-hand array. Reset in `resetHandState`.
     @State private var currentOutcome: Outcome? = nil
+    /// The in-progress hand's session id — the write-back target. Normally `session.id`, but set to the
+    /// edited/resumed hand's `sessionId` on `rehydrate` so a hand from any session replaces by id in its
+    /// OWN session. Reset to `session.id` in `resetHandState`.
+    @State private var currentSessionID: UUID
+    /// Whether the hand is being closed complete (showdown / fold-out) vs. set aside via Skip. Set at
+    /// each save so `buildHand` (incl. post-close re-saves) carries it. Reset in `resetHandState`.
+    @State private var currentComplete: Bool = false
+    /// True while editing/resuming a hand opened from History — swaps the nav "Back" for "Done" (save +
+    /// return to History). Set in `beginEdit`, cleared in `resetHandState`.
+    @State private var isEditing: Bool = false
 
     // Hero seat — locked for the session
     @State private var heroSeat: Int? = nil
@@ -127,6 +137,7 @@ struct HandEntryView: View {
         self.session = session
         self.onBack = onBack
         _tableSize = State(initialValue: session.tableSize)
+        _currentSessionID = State(initialValue: session.id)
     }
 
     // MARK: - Computed Properties
@@ -275,13 +286,24 @@ struct HandEntryView: View {
 
                 // ── Nav bar ───────────────────────────────────────────
                 HStack {
-                    Button(action: onBack) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(Color.gold)
+                    if isEditing {
+                        // Editing/resuming a hand from History: the exit is "Done" (save + back to
+                        // History), not the recording-session Back (→ New Session).
+                        Button(action: doneEditing) {
+                            Text("Done")
+                                .font(.custom("Arial", size: 16)).fontWeight(.bold)
+                                .foregroundStyle(Color.gold)
+                        }
+                    } else {
+                        Button(action: onBack) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(Color.gold)
+                        }
                     }
                     Spacer()
-                    Text(phase == .selectSeat ? "Select Your Seat" : "Hand #\(handNumber)")
+                    Text(isEditing ? "Editing · Hand #\(handNumber)"
+                                   : (phase == .selectSeat ? "Select Your Seat" : "Hand #\(handNumber)"))
                         .font(.custom("Arial", size: 17))
                         .fontWeight(.bold)
                         .foregroundStyle(Color.textBody)
@@ -499,6 +521,19 @@ struct HandEntryView: View {
         .animation(.easeInOut(duration: 0.2), value: entryStreet != nil)
         .animation(.easeInOut(duration: 0.2), value: effEntryVisible)
         .animation(.easeInOut(duration: 0.2), value: phase)
+        // Edit/Resume request from History: auto-skip the live hand, rehydrate the target, consume it.
+        // (Guard means we only ever set non-nil → nil, never nil → nil, so no publish loop.)
+        .onChange(of: store.editingHandID) { _, id in
+            guard let id else { return }
+            if let hand = store.hand(id: id) { beginEdit(hand) }
+            store.editingHandID = nil
+        }
+        .onAppear {
+            if let id = store.editingHandID, let hand = store.hand(id: id) {
+                beginEdit(hand)
+                store.editingHandID = nil
+            }
+        }
     }
 
     // MARK: - Seat Tap Handler
@@ -966,7 +1001,7 @@ struct HandEntryView: View {
         if let winner = activeSeatSequence.first {
             handCloseSummary = (winner == heroSeat) ? "You win" : "Seat \(winner + 1) wins"
         }
-        saveCurrentHand(outcome: nil)
+        saveCurrentHand(outcome: nil, complete: true)
         phase = .handClosed
         highlightedSeat = nil
     }
@@ -983,7 +1018,7 @@ struct HandEntryView: View {
             phase = .showdown
         } else {
             handCloseSummary = "Showdown"
-            saveCurrentHand(outcome: nil)
+            saveCurrentHand(outcome: nil, complete: true)
             phase = .handClosed
             highlightedSeat = nil
         }
@@ -995,7 +1030,7 @@ struct HandEntryView: View {
         case .lose: handCloseSummary = "You lose"
         case .chop: handCloseSummary = "Chop"
         }
-        saveCurrentHand(outcome: outcome)
+        saveCurrentHand(outcome: outcome, complete: true)
         phase = .handClosed
         highlightedSeat = nil
     }
@@ -1428,7 +1463,7 @@ struct HandEntryView: View {
         guard phase == .handClosed else { return }
         // Rebuild from live state and upsert — `buildHand` already reads the current card groups, so a
         // post-close edit is just another save of the same `currentHandID` (no field-by-field patch).
-        store.saveHand(buildHand(outcome: currentOutcome), in: session.id)
+        store.saveHand(buildHand(outcome: currentOutcome), in: currentSessionID)
     }
 
     // MARK: - Card Strip
@@ -2484,6 +2519,9 @@ struct HandEntryView: View {
     private func resetHandState() {
         currentHandID = UUID()     // a new hand gets a fresh durable identity (Undo-reopen keeps its own)
         currentOutcome = nil
+        currentSessionID = session.id   // a fresh hand belongs to the live session (edit retargets it)
+        currentComplete = false
+        isEditing = false
         buttonSeat = nil
         holeGroup  = CardGroup(capacity: 2)
         flopGroup  = CardGroup(capacity: 3)
@@ -2519,7 +2557,7 @@ struct HandEntryView: View {
         }
         return Hand(
             id: currentHandID,                  // stable across re-close + post-close edits (upsert key)
-            sessionId: session.id,
+            sessionId: currentSessionID,        // the hand's own session (= session.id, or an edited hand's)
             handNumber: handNumber,
             title: nil,
             heroSeatIndex: heroSeat ?? 0,
@@ -2537,6 +2575,7 @@ struct HandEntryView: View {
             villainGroups: villainGroups,
             streets: streetsToSave,
             lastStreet: currentStreet,   // furthest street reached — the transcript/replay read-out bound
+            isComplete: currentComplete, // real close vs. Skip — drives result + resume-vs-edit
             outcome: outcome,
             potSize: nil,
             potUnit: session.potUnit,
@@ -2545,11 +2584,108 @@ struct HandEntryView: View {
         )
     }
 
-    /// Persist the current hand at close. Single write path: records the outcome (so post-close edits
-    /// can rebuild) and upserts by `currentHandID` — re-closing after Undo updates the same record.
-    private func saveCurrentHand(outcome: Outcome?) {
+    /// Persist the current hand at close. Single write path: records the outcome + completion (so
+    /// post-close edits rebuild faithfully) and upserts by `currentHandID` into `currentSessionID` —
+    /// re-closing after Undo updates the same record. `complete: false` is the Skip path.
+    private func saveCurrentHand(outcome: Outcome?, complete: Bool) {
         currentOutcome = outcome
-        store.saveHand(buildHand(outcome: outcome), in: session.id)
+        currentComplete = complete
+        store.saveHand(buildHand(outcome: outcome), in: currentSessionID)
+    }
+
+    // MARK: - Edit / Resume (rehydrate a saved hand)
+
+    /// Edit/Resume entry. Auto-saves any in-progress live hand Skip-style (so it isn't lost), then
+    /// rehydrates the requested hand into the live state. Driven by `store.editingHandID`.
+    private func beginEdit(_ hand: Hand) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if phase == .recordingHand || phase == .showdown { skipHand() }  // preserve the live hand
+            rehydrate(from: hand)
+            isEditing = true
+        }
+    }
+
+    /// "Done" — exit the edit/resume flow back to History, saving on the way out. An unfinished hand
+    /// (still live) persists Skip-style (incomplete, resumable again); a closed hand is already saved.
+    /// Then the recorder resets to a fresh hand for the live session, ready to record next.
+    private func doneEditing() {
+        if entryTarget != nil { closeEntry() }   // flush an open card picker (normalize + card re-sync)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if phase == .recordingHand || phase == .showdown { skipHand() }
+            let next = (store.session(id: session.id)?.hands.map(\.handNumber).max() ?? 0) + 1
+            resetHandState()                       // clears isEditing; currentSessionID → session.id
+            heroSeat = session.heroSeatIndex
+            handNumber = next
+            phase = .placingButton
+        }
+        store.jumpToHistory = true
+    }
+
+    /// The inverse of `buildHand` (+ `resetHandState`): reconstruct the live `@State` from a saved hand.
+    /// **Keep adjacent to `buildHand` — they must stay in lockstep.** A complete hand lands on the frozen
+    /// summary (`.handClosed`, edit via Undo / the showdown overlay); a skipped (incomplete) hand reopens
+    /// live (`.recordingHand`) at the cue, reusing the Skip→Undo reopen step so it resumes exactly there.
+    private func rehydrate(from hand: Hand) {
+        currentHandID    = hand.id
+        currentSessionID = hand.sessionId       // write back into the hand's OWN session (replace-by-id)
+        currentComplete  = hand.isComplete
+        currentOutcome   = hand.outcome
+        handNumber       = hand.handNumber
+        heroSeat         = hand.heroSeatIndex
+        buttonSeat       = hand.buttonSeatIndex
+        tableSize        = hand.tableSize
+        emptySeats       = Set(0..<hand.tableSize).subtracting(hand.occupiedSeatIndices)
+        holeGroup        = hand.holeGroup
+        flopGroup        = hand.flopGroup  ?? CardGroup(capacity: 3)
+        turnGroup        = hand.turnGroup  ?? CardGroup(capacity: 1)
+        riverGroup       = hand.riverGroup ?? CardGroup(capacity: 1)
+        villainGroups    = hand.villainGroups
+        effectiveStack   = hand.effectiveStack.map { Int($0) }
+
+        // Split `hand.streets` back into closed `streets` + the live `actionsThisStreet` for the street
+        // the hand ended on (`lastStreet`) — the inverse of buildHand's append. A run-out has no actions
+        // on `lastStreet`, so it lands as an empty live street with everything prior closed.
+        currentStreet = hand.lastStreet
+        if let live = hand.streets.first(where: { $0.name == hand.lastStreet }) {
+            actionsThisStreet = live.actions
+            streets = hand.streets.filter { $0.name != hand.lastStreet }
+        } else {
+            actionsThisStreet = []
+            streets = hand.streets
+        }
+        recomputeDerivedState()   // foldedSeats / activeSeatSequence / betLevelThisStreet, one definition
+
+        // Clear transient entry/picker/sizing UI so nothing leaks from the prior live hand.
+        entryTarget = nil; focusIndex = 0; entryLocked = false
+        sizingRowVisible = false
+        effEntryVisible = false; effDraft = ""; effReplaceOnInput = false
+        seatEditMode = false
+        lastHandWasSkipped = false
+
+        if hand.isComplete {
+            handCloseSummary = closedSummary(for: hand)
+            highlightedSeat = nil
+            streetClosedDecisively = false
+            phase = .handClosed
+        } else {
+            // Resume live, cue restored — identical to the live Skip→Undo reopen (see undoLastAction).
+            handCloseSummary = ""
+            phase = .recordingHand
+            highlightedSeat = actionsThisStreet.last?.seatIndex ?? firstActor(of: currentStreet)
+        }
+    }
+
+    /// Felt summary for a rehydrated complete hand (the live `handCloseSummary` isn't persisted).
+    private func closedSummary(for hand: Hand) -> String {
+        switch hand.result {
+        case .win:  return "You win"
+        case .lose: return "You lose"
+        case .chop: return "Chop"
+        case .folded:
+            let stillIn = hand.stillInSeatIndices
+            return stillIn.count == 1 ? "Seat \(stillIn[0] + 1) wins" : "Showdown"
+        case .incomplete: return "SKIPPED"   // not reached (incomplete lands in recordingHand)
+        }
     }
 
     /// Deals the next hand from the hand-closed state: place the dealer button on the tapped seat,
@@ -2574,7 +2710,7 @@ struct HandEntryView: View {
     private func skipHand() {
         withAnimation(.easeInOut(duration: 0.2)) {
             handCloseSummary = "SKIPPED"
-            saveCurrentHand(outcome: nil)
+            saveCurrentHand(outcome: nil, complete: false)   // incomplete → resumable from History
             lastHandWasSkipped = true
             highlightedSeat = nil
             phase = .handClosed

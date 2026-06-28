@@ -26,9 +26,7 @@ struct HistoryListView: View {
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
                     .navigationDestination(for: UUID.self) { id in
-                        if let hand = store.hand(id: id) {
-                            HandDetailView(hand: hand)
-                        }
+                        HandDetailView(handID: id)
                     }
                 }
             }

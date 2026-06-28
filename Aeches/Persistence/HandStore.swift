@@ -30,7 +30,7 @@ extension HandStore {
 final class FileHandStore: HandStore {
     /// Bump on any model change during the build to discard the old dev file (no migration code while
     /// iterating — see the Index's "Throwaway dev data" principle).
-    private static let storeVersion = 2   // bumped: Hand gained `lastStreet` (Phase 3)
+    private static let storeVersion = 3   // bumped: Hand gained `isComplete` (Phase 6)
 
     /// The version travels with the data so `load()` can discard a stale file.
     private struct Payload: Codable {

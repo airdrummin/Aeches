@@ -19,6 +19,13 @@ import Combine   // ObservableObject + @Published (not reliably re-exported via 
 final class SessionStore: ObservableObject {
     @Published private(set) var sessions: [Session]
 
+    /// Edit/Resume request slot. `HandDetailView` sets it to a hand's id; `ContentView` switches to the
+    /// Record tab and `HandEntryView` consumes it (auto-skip current → rehydrate → clear). nil = none.
+    @Published var editingHandID: UUID? = nil
+
+    /// Set by the recorder's "Done" (end of an Edit/Resume) so `ContentView` returns to the History tab.
+    @Published var jumpToHistory: Bool = false
+
     private let backing: HandStore
 
     init(backing: HandStore) {
