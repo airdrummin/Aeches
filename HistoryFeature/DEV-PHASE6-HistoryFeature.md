@@ -1,12 +1,17 @@
-# Phase 6 — Edit (rehydrate + write-back)
+# Phase 6 — Edit (rehydrate + write-back) + resume skipped hands
 
 **Status:** ⬜ Not started · **Depends on:** Phase 2 (store), Phase 5 (renderers proven end-to-end)
 
 ## Goal
 
-Open a saved hand back in the **real recording screen**, fully editable — undo/redo table actions,
-revise cards, change the outcome — then write the changes back to the store. One engine for new and
-edited hands (DRY).
+Open a saved hand back in the **real recording screen** and write changes back over the same hand. Two
+flavors, one engine:
+- **Edit a completed hand** — reopen at the frozen summary; undo/redo actions, revise cards, change the
+  outcome.
+- **Resume a skipped (incomplete) hand** — reopen **live at the table**, cue restored, and finish it
+  normally. (Users skip hands often and must be able to come back and complete them.)
+
+One recording engine for new, edited, and resumed hands (DRY).
 
 ## Why
 
@@ -30,50 +35,93 @@ Reconstruct live `@State` from the hand (mirror image of `buildHand` / `resetHan
 - `foldedSeats`, `activeSeatSequence` ← re-derived from the action log.
 - Card groups (`holeGroup`, `flop/turn/riverGroup`, `villainGroups`) ← copied from the hand's groups.
 - `effectiveStack` ← from the hand.
-- **Phase** ← `.handClosed` (land on the frozen summary, exactly where recording leaves a finished
-  hand) so the user can Undo into it, or re-open the showdown overlay, using the *existing* machinery.
+- **Phase** ← branches on completion (see below): complete → `.handClosed` (frozen summary, edit via
+  the existing Undo / showdown-overlay machinery); incomplete → `.recordingHand` (resume live).
+
+### Completion: `isComplete` + resume-vs-edit (locked)
+`outcome == nil` is ambiguous — a finished fold-out and a skipped hand both save it, and a
+hero-fold-then-skip is indistinguishable from a real villain showdown. So store the fact, don't infer it:
+- Add **`Hand.isComplete: Bool`** (default `true`). `skipHand` sets it `false`; every real close
+  (`triggerFoldOut`, `resolveShowdown`, the hero-folded `reachShowdown`) sets it `true`. `buildHand`
+  carries it. (Model change → bump `storeVersion`.)
+- **`Hand.result`** reads the flag: `!isComplete → .incomplete` (authoritative — fixes the Phase 4 chip's
+  hero-fold-then-skip mislabel); otherwise derive win/lose/chop/folded as today.
+- **Rehydrate branches on it:**
+  - **complete →** `.handClosed`, frozen summary (Edit).
+  - **incomplete →** `.recordingHand`, cue restored by reusing the *existing* skipped-reopen step (the
+    Undo-on-skip path, `HandEntryView.swift` ~:1108: `highlightedSeat = actionsThisStreet.last?.seatIndex
+    ?? firstActor(of: currentStreet)`) — so Resume lands exactly where the live Skip→Undo flow does, no
+    new cue reconstruction, no Undo tap.
 
 ### Edit identity + write-back
-- Carry the hand's `id` so the close path calls `store.saveHand(_, in:)` as a **replace-by-id**, not an
-  append (the replace-by-id from Phase 2 already does this).
+- Carry the hand's `id` (`rehydrate` sets `currentHandID = hand.id`) so the close path's
+  `store.saveHand(_, in:)` is a **replace-by-id**, not an append (Phase 2 already does this).
+- **Carry the hand's `sessionId` too.** `saveHand(_, in: sessionId)` resolves the session *first*, and
+  the recorder's three save sites currently pass `session.id` (HandEntryView :2552, :1431, buildHand's
+  `sessionId` :2522). Writing back with the wrong session id would duplicate into the wrong session. Add
+  a `currentSessionID` (= `session.id` normally; set to `hand.sessionId` on rehydrate; reset in
+  `resetHandState`) and route those sites through it. Because `tableSize`/`heroSeat`/etc. are `@State`
+  that rehydrate overrides, this lets the screen edit/resume a hand from **any** session with no
+  `activeSession` swap (no teardown of the live hand).
 - All existing recording interactions (Undo batches, Next Street, sizing, card picker, Skip/Move) work
-  unchanged because the live state is genuinely reconstructed — no special "edit mode" branching beyond
-  the entry point and the save target.
+  unchanged — the live state is genuinely reconstructed; no "edit mode" branching beyond the entry
+  point, the completion-based landing phase, and the save target.
 
-### Entry point
-- `HandDetailView` **Edit** routes to the shared **Record-tab recording screen** (it does *not* push a
-  fresh recorder): hand the edit hand's id to the screen (e.g. an `editingHandID` on `SessionStore` or a
-  binding) and switch to the Record tab. The screen auto-saves its current live hand Skip-style, then
-  `rehydrate(from:)`s the edit hand. On close it saves back by id; the auto-skipped live hand remains in
-  History, resumable via Undo. (Land post-edit on the edited hand's frozen summary.)
+### Entry point + nav
+- `HandDetailView`'s action button reads **"Resume"** for an incomplete hand, **"Edit"** for a complete
+  one (label + landing phase key off `isComplete`).
+- It routes to the shared **Record-tab recording screen** (no modal, no fresh recorder): set
+  **`editingHandID` on `SessionStore`**; `ContentView` observes it and switches `activeTab = .record`;
+  `HandEntryView` observes it, auto-saves its current live hand Skip-style (existing `skipHand`, only if
+  a live hand is in progress), `rehydrate(from: store.hand(id:))`s the target, then clears
+  `editingHandID`. On close it saves back by id; the auto-skipped live hand remains in History.
+- **Release cold-start deferred:** in DEBUG the dev-session `HandEntryView` is always mounted, so this
+  works in place. The case where `activeSession == nil` (a shipped app opened to just History, recorder
+  not mounted) is handled when the real session/auth flow lands (pairs with Phase 7).
 
 ## Changes — file by file
 
-- **`HandEntryView.swift`** — add a private `rehydrate(from: Hand)` that fills every `@State` (the
-  inverse of `buildHand`), invoked after an auto-save (Skip path) of the current live hand. Ensure the
-  close/save path targets the **edited hand's id** (replace-by-id), not a new append.
-- **`HandDetailView.swift`** — wire the **Edit** button to set the edit target + switch to Record.
-- **`ContentView.swift` / nav** — Edit routes to the **Record tab** (switch tabs + hand off the edit
-  hand's id via the store/binding); no modal, no second recorder. After close the user is on the Record
-  tab with the edited hand saved; History reflects it.
+- **`Models.swift`** — add `Hand.isComplete: Bool = true`; `Hand.result` reads it (`!isComplete →
+  .incomplete`). Bump `storeVersion` (in `HandStore.swift`).
+- **`HandEntryView.swift`** — add `rehydrate(from: Hand)` (inverse of `buildHand`, kept adjacent to it),
+  branching the landing phase on `isComplete`; reuse the skipped-reopen cue step for Resume. Add
+  `currentSessionID` and route the three save sites + `buildHand` through it; `buildHand` carries
+  `isComplete`. `skipHand` sets incomplete; the real closes set complete. Observe `store.editingHandID`
+  to drive auto-skip → rehydrate → clear.
+- **`HandDetailView.swift`** — the action button shows **Resume** (incomplete) / **Edit** (complete) and
+  sets `store.editingHandID`.
+- **`ContentView.swift`** — observe `store.editingHandID`; switch to the Record tab when set.
+- **`SessionStore.swift`** — add `@Published var editingHandID: UUID?`.
 
 ## Verification (action-tested)
 
-1. Edit a saved hand: Undo the last action, change a hole card from footnote to bound, re-close →
+1. Edit a completed hand: Undo the last action, change a hole card from footnote to bound, re-close →
    reopen from History → changes are present and the transcript reflects them.
 2. Edit a hand's outcome (Undo to reopen the Win/Lose/Chop overlay, re-pick) → stored outcome updates.
-3. Editing does **not** create a duplicate — the same hand id is replaced; History count is unchanged.
-4. Round-trip after edit still lossless (Phase 1 assert holds on the edited hand).
+3. **Resume a skipped hand:** Skip a hand mid-street → from History it shows **Incomplete** with a
+   **Resume** button → tap → land live at the table with the cue restored → finish it (showdown/fold-out)
+   → it reopens **complete** (chip updates), same hand id, no duplicate.
+4. Editing/resuming does **not** create a duplicate — the same hand id is replaced; History count is
+   unchanged. A cross-session hand writes back to **its own** session (no leak/dupe).
+5. **Render-parity round-trip:** `transcript(for: buildHand(rehydrate(h)))` and the per-street
+   `seatStates` match the original `h` (the meaningful losslessness — see the round-trip note).
 
-**Done when:** any saved hand can be reopened in the recorder, revised with the normal controls, and
-saved back over itself with full fidelity.
+**Done when:** any saved hand can be reopened in the recorder — completed hands edited, skipped hands
+resumed and finished — and saved back over itself with full fidelity.
 
 ## Risks / notes
 
 - Rehydration is the inverse of `buildHand` — keep them adjacent and reviewed together so they never
-  drift. A round-trip test (`buildHand(rehydrate(h)) == h`) guards this.
-- Re-deriving `foldedSeats`/`activeSeatSequence` from the log must match what live recording would have
-  produced; lean on the Phase 3 derivation helpers so there's one definition.
+  drift.
+- **Round-trip is render-parity, not literal `==`.** `buildHand` wraps the live actions in a fresh
+  `Street` (new `UUID`), so `buildHand(rehydrate(h)) == h` won't hold byte-for-byte (one Street id
+  differs; actions and everything rendered are identical). Verify via `transcript(for:)` + group/seat
+  equality (Option A), the Phase-1 "renders identically" bar — not raw struct equality.
+- Re-deriving `foldedSeats`/`activeSeatSequence`/`betLevelThisStreet` is **free**: set `streets` /
+  `currentStreet` / `actionsThisStreet` (split `hand.streets` on `hand.lastStreet`) and the card groups,
+  then call the existing `recomputeDerivedState()` — one definition, no second derivation.
+- **Completion flag is a model change** → bump `storeVersion`; the dev file resets (no migration while
+  iterating). It also makes the Phase 4 "Incomplete" chip authoritative.
 - **Nav (locked): reuse the single recording screen — no modal.** Entering Edit auto-saves any
   in-progress live hand exactly like **Skip** (saved incomplete, all state preserved so Undo reopens it),
   then loads the edit hand into the same screen. This leans on the existing Skip→Undo machinery rather
