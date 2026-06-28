@@ -27,6 +27,7 @@ where we are.
 | Replay style | **Step through *actions* (tap to advance)** — one decision at a time, board revealed per street; **preflop pure open-folds are elided** (a seat whose only preflop action is a fold gets no step), mirroring the transcript. Outcome on the felt at the final/showdown beat | Deterministic, reuses the seat deriver by feeding it an action *prefix*; minimal motion work. (Revised from the original street-granular plan during Phase 5 — street-only read like screenshots; per-action plays the hand as it happened.) |
 | Edit model | **Rehydrate the saved `Hand` back into `HandEntryView`** | One recording engine, reused for new + edited hands (DRY). Requires lossless persistence (above). |
 | Edit navigation | **Reuse the single recording screen — no modal.** Entering Edit auto-saves the in-progress live hand Skip-style (resumable via Undo), then loads the hand being edited | One screen; leans on the existing Skip→Undo machinery so an interrupted live hand is preserved, not lost or duplicated. |
+| History organization (Phase 7) | **Accordion** (`DisclosureGroup` per session) with per-session hand numbering; per-hand **delete** + edit/resume; per-session **delete** + **rename/edit** (reuse the New Session screen). Delete = confirm + **no renumber**. A DEBUG **day-based session** (header = today's date) scaffolds real headers now | Players think in sessions; hand #s are per-session ordinals. Delete/rename are the missing management verbs. The day scaffold lets us build the grouped UI before the real session/auth flow (which brings session creation/selection + resuming arbitrary past sessions). |
 | Hand completion | **Store `isComplete: Bool` on `Hand`** (default `true`; Skip sets `false`, every real close sets `true`). Reopening branches on it: **incomplete → resume LIVE** at the table to finish; **complete → frozen summary** to edit | `outcome == nil` is ambiguous (a finished fold-out vs a skipped hand — and a hero-fold-then-skip is indistinguishable from a real villain showdown). A stored flag is authoritative: lets skipped hands be resumed/finished (Phase 6), and makes the History "Incomplete" chip exact instead of inferred. Bool now; promote to a status enum only if a third state appears. See Phase 6. |
 | Losslessness check | **Manual verification** with an "every card mode" hand — no permanent test target | Solo project, verified by hand each phase. Standard check: one hand exercising footnote + relationship + bound + board-suit-count + a villain. |
 
@@ -47,7 +48,7 @@ Pure renderers (functions of a Hand, no live @State)            ◀── Phase 
 Consumers
   ├─ HandEntryView   (record new + EDIT existing + RESUME skipped)  ◀── Phase 6
   ├─ HistoryTab list (every hand, newest first)              ◀── Phase 4
-  │     └─ session-grouped (headers → hands; resume a session) ◀── Phase 7
+  │     └─ session-grouped accordion (delete/rename/resume)    ◀── Phase 7
   └─ ReplayView      (read-only, step-through)               ◀── Phase 5
 ```
 
@@ -66,7 +67,7 @@ pure functions of a `Hand`, so recording, History rows, and Replay all render th
 | 4 | History list UI | ✅ Done | 2, 3 | [DEV-PHASE4-HistoryFeature.md](DEV-PHASE4-HistoryFeature.md) |
 | 5 | Replay (read-only, step-through) | ✅ Done | 3, 4 | [DEV-PHASE5-HistoryFeature.md](DEV-PHASE5-HistoryFeature.md) |
 | 6 | Edit (rehydrate + write-back) + resume skipped hands | ✅ Done | 2, 5 | [DEV-PHASE6-HistoryFeature.md](DEV-PHASE6-HistoryFeature.md) |
-| 7 | Session-grouped History (+ resume a session) | ⬜ Not started | 4, 6, session/auth flow | [DEV-PHASE7-HistoryFeature.md](DEV-PHASE7-HistoryFeature.md) |
+| 7 | Session-grouped History (accordion; delete, rename, resume) | ⬜ Not started | 4, 6 | [DEV-PHASE7-HistoryFeature.md](DEV-PHASE7-HistoryFeature.md) |
 
 **Status legend:** ⬜ Not started · 🟡 In progress · 🔵 In review/testing · ✅ Done
 
